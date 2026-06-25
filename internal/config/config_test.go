@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -33,12 +34,13 @@ func TestDefaultsLoadWithNoSources(t *testing.T) {
 func TestConfFileParsing(t *testing.T) {
 	conf := writeConf(t, `
 # a comment
-flyway.url=jdbc:postgresql://localhost/db
+flyway.url=jdbc:mysql://host/db?useSSL=false&a=1
 flyway.user = sa
 flyway.locations = filesystem:a, filesystem:b
 flyway.table=history
 flyway.placeholders.env=prod
 flyway.placeholders.region=eu
+flyway.placeholders.kv=x=y
 flyway.sqlMigrationSuffixes=.sql,.ddl
 flyway.placeholderReplacement=false
 notflyway.key=ignored
@@ -49,8 +51,12 @@ malformedline
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.URL != "jdbc:postgresql://localhost/db" {
-		t.Errorf("url = %q", cfg.URL)
+	// strings.Cut splits on the FIRST '=', so '=' in JDBC URLs / values is kept.
+	if cfg.URL != "jdbc:mysql://host/db?useSSL=false&a=1" {
+		t.Errorf("url with embedded '=' truncated: %q", cfg.URL)
+	}
+	if cfg.Placeholders["kv"] != "x=y" {
+		t.Errorf("placeholder value with '=' truncated: %q", cfg.Placeholders["kv"])
 	}
 	if cfg.User != "sa" {
 		t.Errorf("user = %q (whitespace around '=' should be trimmed)", cfg.User)
@@ -67,9 +73,59 @@ malformedline
 	if cfg.PlaceholderReplacement {
 		t.Error("placeholderReplacement should be false")
 	}
-	// Unknown / malformed / non-flyway lines must produce warnings, not failure.
-	if len(cfg.Warnings) < 3 {
-		t.Errorf("expected >=3 warnings (unknownKey, notflyway, malformed), got %v", cfg.Warnings)
+	// Unknown / malformed / non-flyway lines must each produce a categorized
+	// warning, not a failure.
+	for _, frag := range []string{"flyway.unknownKey", "non-flyway key", "without '='"} {
+		if !anyContains(cfg.Warnings, frag) {
+			t.Errorf("expected a warning containing %q, got %v", frag, cfg.Warnings)
+		}
+	}
+}
+
+func anyContains(ss []string, sub string) bool {
+	for _, s := range ss {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDuplicateKeyLastWins(t *testing.T) {
+	conf := writeConf(t, "flyway.user=first\nflyway.user=second\n")
+	cfg, err := Load(Flags{ConfigFiles: []string{conf}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.User != "second" {
+		t.Errorf("duplicate key should be last-wins: user = %q", cfg.User)
+	}
+}
+
+func TestPlaceholderCaseAsymmetry(t *testing.T) {
+	// Conf placeholder names keep their case; env placeholder names are lowercased.
+	// A conf 'Foo' and an env 'FOO' are therefore distinct keys.
+	conf := writeConf(t, "flyway.placeholders.Foo=conf\n")
+	cfg, err := Load(Flags{ConfigFiles: []string{conf}}, []string{"FLYWAY_PLACEHOLDERS_FOO=env"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Placeholders["foo"] != "env" {
+		t.Errorf("env placeholder should lowercase to 'foo': %v", cfg.Placeholders)
+	}
+	if cfg.Placeholders["Foo"] != "conf" {
+		t.Errorf("conf placeholder should keep case 'Foo': %v", cfg.Placeholders)
+	}
+}
+
+func TestCRLFConfFile(t *testing.T) {
+	conf := writeConf(t, "flyway.user=sa\r\nflyway.table=h\r\n")
+	cfg, err := Load(Flags{ConfigFiles: []string{conf}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.User != "sa" {
+		t.Errorf("CRLF should be trimmed: user = %q", cfg.User)
 	}
 }
 
@@ -152,6 +208,9 @@ func TestEnvToCamel(t *testing.T) {
 func TestMissingConfigFileErrors(t *testing.T) {
 	_, err := Load(Flags{ConfigFiles: []string{"/no/such/flyway.conf"}}, nil)
 	if err == nil {
-		t.Error("expected error for explicitly-specified missing config file")
+		t.Fatal("expected error for explicitly-specified missing config file")
+	}
+	if !strings.Contains(err.Error(), "/no/such/flyway.conf") {
+		t.Errorf("error should name the missing file: %v", err)
 	}
 }

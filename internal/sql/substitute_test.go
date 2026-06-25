@@ -53,3 +53,25 @@ func TestSubstituteCustomDelimiters(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "x")
 	}
 }
+
+func TestSubstituteAdjacentPlaceholders(t *testing.T) {
+	got, err := Substitute("${a}${b}", map[string]string{"a": "X", "b": "Y"}, "${", "}", true)
+	if err != nil || got != "XY" {
+		t.Errorf("adjacent placeholders: got %q err %v, want %q", got, err, "XY")
+	}
+}
+
+func TestSubstituteNoRecursion(t *testing.T) {
+	// A value that looks like a placeholder must NOT be re-substituted (matches Flyway).
+	got, err := Substitute("${a}", map[string]string{"a": "${b}"}, "${", "}", true)
+	if err != nil || got != "${b}" {
+		t.Errorf("recursion: got %q err %v, want literal %q", got, err, "${b}")
+	}
+}
+
+func TestSubstituteEqualDelimitersTwoPlaceholders(t *testing.T) {
+	got, err := Substitute("@@a@@@@b@@", map[string]string{"a": "1", "b": "2"}, "@@", "@@", true)
+	if err != nil || got != "12" {
+		t.Errorf("equal-delimiter two placeholders: got %q err %v, want %q", got, err, "12")
+	}
+}

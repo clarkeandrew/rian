@@ -67,7 +67,11 @@ func Split(content string) []string {
 			atLineStart = false
 
 		case ch == '\'' || ch == '"' || ch == '`': // quoted string / identifier
-			j := consumeQuoted(content, i, ch)
+			// Backslash is an escape only inside Postgres E'...' strings; in a
+			// plain '...' literal (standard_conforming_strings=on, MySQL default)
+			// it is literal and only '' escapes a quote.
+			allowBackslash := ch == '\'' && isEStringStart(content, i)
+			j := consumeQuoted(content, i, ch, allowBackslash)
 			cur.WriteString(content[i:j])
 			i = j
 			atLineStart = false
@@ -107,11 +111,10 @@ func Split(content string) []string {
 }
 
 // consumeQuoted returns the index just past the closing quote that matches the
-// opening quote at i. Doubled quotes (”) escape; backslash escapes apply only
-// inside single-quoted strings (MySQL / Postgres E-strings).
-func consumeQuoted(s string, i int, q byte) int {
+// opening quote at i. A doubled quote always escapes; backslash escapes only
+// when allowBackslash is set (Postgres E'...' strings).
+func consumeQuoted(s string, i int, q byte, allowBackslash bool) int {
 	n := len(s)
-	allowBackslash := q == '\''
 	for j := i + 1; j < n; {
 		c := s[j]
 		if c == '\\' && allowBackslash && j+1 < n {
@@ -142,6 +145,18 @@ func dollarTag(s string, i int) (string, bool) {
 		return s[i : j+1], true
 	}
 	return "", false
+}
+
+// isEStringStart reports whether the single quote at i opens a Postgres E'...'
+// string: the preceding byte is 'e'/'E' and is not part of a longer identifier.
+func isEStringStart(s string, i int) bool {
+	if i == 0 {
+		return false
+	}
+	if c := s[i-1]; c != 'e' && c != 'E' {
+		return false
+	}
+	return i-2 < 0 || !isTagChar(s[i-2])
 }
 
 func isTagChar(b byte) bool {
