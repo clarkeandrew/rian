@@ -2,14 +2,12 @@ name: Release
 
 # Automated, Conventional-Commit-driven releases.
 #
-# On a push to main, svu computes the next SemVer (staying in 0.x via --v0). If a
-# release is warranted, the workflow tags it and runs GoReleaser to build the
-# archives + checksums and push the multi-arch GHCR image, and creates a DRAFT
-# GitHub Release for review. A tag pushed by GITHUB_TOKEN does NOT retrigger
-# workflows, so tagging and building happen in this one job (no dead tags).
-#
-# workflow_dispatch builds the tag already at HEAD (used for the initial v0.1.0
-# release and any manual re-run) without computing or creating a new tag.
+# On a push to main (or a manual workflow_dispatch), svu computes the next SemVer
+# (staying in 0.x via --v0). If a release is warranted, the workflow tags it and
+# runs GoReleaser to build the archives + checksums, push the multi-arch GHCR
+# image, and publish the GitHub Release. The tag is created inside the job via
+# GITHUB_TOKEN; because a GITHUB_TOKEN tag does NOT retrigger workflows, tagging
+# and building happen together in this one job (no dead tags).
 
 on:
   push:
@@ -49,27 +47,21 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Build the tag currently at HEAD (e.g. the seeded v0.1.0). Fail loudly
-            # if HEAD is not tagged, rather than silently building a snapshot.
-            if ! TAG="$(git describe --tags --exact-match 2>/dev/null)"; then
-              echo "::error::workflow_dispatch requires HEAD to be tagged (e.g. seed v0.1.0 first)"
+          CURRENT="$(svu current 2>/dev/null || echo v0.0.0)"
+          NEXT="$(svu next --v0)"
+          echo "current=$CURRENT next=$NEXT"
+          if [ "$CURRENT" = "$NEXT" ]; then
+            # No feat/fix since the last tag. On a manual dispatch this is almost
+            # always a mistake, so fail loudly instead of silently no-op'ing.
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "::error::no qualifying commits since $CURRENT — nothing to release"
               exit 1
             fi
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "make_tag=false" >> "$GITHUB_OUTPUT"
-            echo "version=$TAG" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
           else
-            CURRENT="$(svu current 2>/dev/null || echo v0.0.0)"
-            NEXT="$(svu next --v0)"
-            echo "current=$CURRENT next=$NEXT"
-            if [ "$CURRENT" = "$NEXT" ]; then
-              echo "release=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "release=true" >> "$GITHUB_OUTPUT"
-              echo "make_tag=true" >> "$GITHUB_OUTPUT"
-              echo "version=$NEXT" >> "$GITHUB_OUTPUT"
-            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "make_tag=true" >> "$GITHUB_OUTPUT"
+            echo "version=$NEXT" >> "$GITHUB_OUTPUT"
           fi
 
       - name: No release needed
