@@ -93,5 +93,8 @@ changelog:
       - "^chore:"
 
 release:
-  draft: true
+  # Auto-publish: the release goes live immediately with its archives, rather
+  # than waiting as a draft. The version tag is created automatically by the
+  # release workflow, so each push of qualifying commits ships a visible release.
+  draft: false
   prerelease: auto
