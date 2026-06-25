@@ -51,9 +51,13 @@ Adding a new database = implementing this interface. It currently abstracts:
   parameterized `InsertHistorySQL` (Postgres uses `$1..$9`; MySQL will use `?`).
 
 These methods are pure (string-returning), so they are unit-tested without a
-database. Live connection/exec wiring (pgx for Postgres) is added with the
-engine, which is the first consumer that needs an open connection. The `engine`
-and `history` packages depend only on `Dialect`, never on a concrete driver.
+database. The live connection is a separate `db.Conn` interface (an open
+connection bound to a Dialect) with `EnsureHistory`, `ReadHistory`,
+`ApplyMigration` (which encapsulates the transaction strategy), `InsertHistory`,
+and `DeleteFailed`. `internal/db/postgres` provides the pgx-backed `Conn`. The
+`engine` depends only on `db.Conn`/`Dialect`, never on pgx — so it is unit-tested
+with an in-memory fake connection, while real driver behavior is covered by the
+end-to-end suite.
 
 ## Key invariants
 
