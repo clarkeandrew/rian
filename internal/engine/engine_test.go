@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/clarkeandrew/rian/internal/checksum"
@@ -19,18 +20,34 @@ import (
 type fakeConn struct {
 	rows       []history.Row
 	failScript string
+	// nonTransactional models a MySQL-style dialect: a failed migration records a
+	// success=false row (requires repair) instead of rolling back cleanly.
+	nonTransactional bool
+	// ensureErr/readErr force errors from EnsureHistory/ReadHistory.
+	ensureErr error
+	readErr   error
+
 	applied    []string
+	statements [][]string // statements passed to each successful ApplyMigration
 }
 
 func (f *fakeConn) Dialect() db.Dialect                         { return nil }
-func (f *fakeConn) EnsureHistory(context.Context, string) error { return nil }
+func (f *fakeConn) EnsureHistory(context.Context, string) error { return f.ensureErr }
 func (f *fakeConn) ReadHistory(context.Context, string) ([]history.Row, error) {
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
 	return append([]history.Row(nil), f.rows...), nil
 }
-func (f *fakeConn) ApplyMigration(_ context.Context, _ string, _ []string, row history.Row) error {
+func (f *fakeConn) ApplyMigration(_ context.Context, _ string, stmts []string, row history.Row) error {
 	if row.Script == f.failScript {
+		if f.nonTransactional {
+			row.Success = false
+			f.rows = append(f.rows, row)
+		}
 		return errors.New("simulated failure")
 	}
+	f.statements = append(f.statements, append([]string(nil), stmts...))
 	row.Success = true
 	f.rows = append(f.rows, row)
 	f.applied = append(f.applied, row.Script)
@@ -135,9 +152,15 @@ func TestMigrateSubstitutesPlaceholders(t *testing.T) {
 	})
 	cfg := testConfig(dir)
 	cfg.Placeholders = map[string]string{"prefix": "app"}
-	eng := New(&fakeConn{}, cfg)
+	conn := &fakeConn{}
+	eng := New(conn, cfg)
 	if _, err := eng.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate with placeholder failed: %v", err)
+	}
+	// The produced SQL must have the placeholder resolved (value-level check).
+	want := []string{"CREATE TABLE app_users (id int)"}
+	if len(conn.statements) != 1 || !reflect.DeepEqual(conn.statements[0], want) {
+		t.Errorf("produced statements = %#v, want %#v", conn.statements, want)
 	}
 
 	// An unresolved placeholder must fail the migration.
@@ -145,6 +168,183 @@ func TestMigrateSubstitutesPlaceholders(t *testing.T) {
 	eng2 := New(&fakeConn{}, testConfig(dir2))
 	if _, err := eng2.Migrate(context.Background()); err == nil {
 		t.Error("expected error for unresolved placeholder")
+	}
+}
+
+func TestMigrateSplitsMultipleStatements(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);\nCREATE TABLE b (id int);",
+	})
+	conn := &fakeConn{}
+	if _, err := New(conn, testConfig(dir)).Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"CREATE TABLE a (id int)", "CREATE TABLE b (id int)"}
+	if len(conn.statements) != 1 || !reflect.DeepEqual(conn.statements[0], want) {
+		t.Errorf("statements = %#v, want one migration with %#v", conn.statements, want)
+	}
+}
+
+func TestMigrateContinuesInstalledRank(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"V2__b.sql": "CREATE TABLE b (id int);",
+	})
+	// History already has V1 applied at a non-contiguous rank 5.
+	ck := checksum.CalculateBytes([]byte("CREATE TABLE a (id int);"))
+	conn := &fakeConn{rows: []history.Row{
+		{InstalledRank: 5, Version: "1", Script: "V1__a.sql", Checksum: &ck, Success: true},
+	}}
+	res, err := New(conn, testConfig(dir)).Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != 1 || res.Applied[0].Script != "V2__b.sql" {
+		t.Fatalf("applied = %v, want only V2", res.Applied)
+	}
+	// New row's rank must continue from max(existing)+1 = 6, not 1 or len+1.
+	last := conn.rows[len(conn.rows)-1]
+	if last.InstalledRank != 6 {
+		t.Errorf("new rank = %d, want 6 (continues from existing max)", last.InstalledRank)
+	}
+}
+
+func TestMigrateRepeatable(t *testing.T) {
+	body := "CREATE OR REPLACE VIEW v AS SELECT 1;"
+	dir := migrationsDir(t, map[string]string{"R__v.sql": body})
+	ck := checksum.CalculateBytes([]byte(body))
+
+	// (a) From empty history: applied with empty Version and a non-nil checksum.
+	conn := &fakeConn{}
+	res, err := New(conn, testConfig(dir)).Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != 1 || res.Applied[0].Script != "R__v.sql" {
+		t.Fatalf("applied = %v, want R__v.sql", res.Applied)
+	}
+	row := conn.rows[0]
+	if row.Version != "" || row.Checksum == nil || *row.Checksum != ck {
+		t.Errorf("repeatable row = %+v, want empty version and checksum %d", row, ck)
+	}
+
+	// (b) Unchanged checksum -> not re-applied.
+	seeded := &fakeConn{rows: []history.Row{
+		{InstalledRank: 1, Version: "", Description: "v", Script: "R__v.sql", Checksum: &ck, Success: true},
+	}}
+	if res, _ := New(seeded, testConfig(dir)).Migrate(context.Background()); len(res.Applied) != 0 {
+		t.Errorf("unchanged repeatable re-applied: %v", res.Applied)
+	}
+
+	// (c) Changed checksum -> re-applied at the next rank.
+	old := int32(999)
+	changed := &fakeConn{rows: []history.Row{
+		{InstalledRank: 3, Version: "", Description: "v", Script: "R__v.sql", Checksum: &old, Success: true},
+	}}
+	res, err = New(changed, testConfig(dir)).Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != 1 {
+		t.Fatalf("changed repeatable should re-apply, got %v", res.Applied)
+	}
+	if last := changed.rows[len(changed.rows)-1]; last.InstalledRank != 4 {
+		t.Errorf("re-applied rank = %d, want 4", last.InstalledRank)
+	}
+}
+
+func TestMigrateMixedVersionedAndRepeatableOrder(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"V2__b.sql": "CREATE TABLE b (id int);",
+		"R__z.sql":  "CREATE OR REPLACE VIEW z AS SELECT 1;",
+	})
+	conn := &fakeConn{}
+	res, err := New(conn, testConfig(dir)).Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotOrder := []string{res.Applied[0].Script, res.Applied[1].Script, res.Applied[2].Script}
+	want := []string{"V1__a.sql", "V2__b.sql", "R__z.sql"}
+	if !reflect.DeepEqual(gotOrder, want) {
+		t.Errorf("apply order = %v, want %v (repeatable last)", gotOrder, want)
+	}
+	for i, wantRank := range []int{1, 2, 3} {
+		if conn.rows[i].InstalledRank != wantRank {
+			t.Errorf("row %d rank = %d, want %d", i, conn.rows[i].InstalledRank, wantRank)
+		}
+	}
+}
+
+func TestMigrateNonTransactionalFailureThenRepair(t *testing.T) {
+	// MySQL-style: a failed migration leaves a success=false row that validate
+	// reports and repair clears, after which a fixed migration can be re-run.
+	dir := migrationsDir(t, map[string]string{"V1__a.sql": "BROKEN;"})
+	conn := &fakeConn{nonTransactional: true, failScript: "V1__a.sql"}
+	eng := New(conn, testConfig(dir))
+
+	if _, err := eng.Migrate(context.Background()); err == nil {
+		t.Fatal("expected migration failure")
+	}
+	if len(conn.rows) != 1 || conn.rows[0].Success {
+		t.Fatalf("expected one success=false row, got %+v", conn.rows)
+	}
+	problems, _ := eng.Validate(context.Background())
+	if len(problems) != 1 || problems[0].Kind != history.FailedMigration {
+		t.Fatalf("validate should report the failed migration, got %v", problems)
+	}
+	if n, _ := eng.Repair(context.Background()); n != 1 {
+		t.Fatalf("repair should remove 1 failed row")
+	}
+	// After repair the (now non-failing) migration applies cleanly.
+	conn.failScript = ""
+	res, err := eng.Migrate(context.Background())
+	if err != nil || len(res.Applied) != 1 {
+		t.Fatalf("re-migrate after repair: applied=%v err=%v", res.Applied, err)
+	}
+}
+
+func TestValidateCleanAndKinds(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{"V1__a.sql": "CREATE TABLE a (id int);"})
+	ck := checksum.CalculateBytes([]byte("CREATE TABLE a (id int);"))
+
+	// Clean: matching checksum -> no problems.
+	clean := &fakeConn{rows: []history.Row{{InstalledRank: 1, Version: "1", Script: "V1__a.sql", Checksum: &ck, Success: true}}}
+	if p, _ := New(clean, testConfig(dir)).Validate(context.Background()); len(p) != 0 {
+		t.Errorf("expected clean validate, got %v", p)
+	}
+
+	// Missing: applied V9 with no file -> MissingMigration.
+	other := int32(1)
+	missing := &fakeConn{rows: []history.Row{
+		{InstalledRank: 1, Version: "1", Script: "V1__a.sql", Checksum: &ck, Success: true},
+		{InstalledRank: 2, Version: "9", Script: "V9__gone.sql", Checksum: &other, Success: true},
+	}}
+	if p, _ := New(missing, testConfig(dir)).Validate(context.Background()); len(p) != 1 || p[0].Kind != history.MissingMigration {
+		t.Errorf("expected MissingMigration, got %v", p)
+	}
+}
+
+func TestCommandsPropagateEnsureHistoryError(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{})
+	boom := errors.New("ensure boom")
+	mk := func() *Engine { return New(&fakeConn{ensureErr: boom}, testConfig(dir)) }
+	ctx := context.Background()
+
+	if _, err := mk().Migrate(ctx); err == nil {
+		t.Error("Migrate should surface EnsureHistory error")
+	}
+	if _, err := mk().Info(ctx); err == nil {
+		t.Error("Info should surface EnsureHistory error")
+	}
+	if _, err := mk().Validate(ctx); err == nil {
+		t.Error("Validate should surface EnsureHistory error")
+	}
+	if err := mk().Baseline(ctx); err == nil {
+		t.Error("Baseline should surface EnsureHistory error")
+	}
+	if _, err := mk().Repair(ctx); err == nil {
+		t.Error("Repair should surface EnsureHistory error")
 	}
 }
 

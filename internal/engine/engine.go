@@ -37,21 +37,35 @@ func (e *Engine) scanOptions() scan.Options {
 	}
 }
 
-// resolve discovers migrations and computes their checksums (keyed by Script).
-func (e *Engine) resolve() ([]scan.Migration, map[string]int32, error) {
+// resolved is the discovered migration set with each file read exactly once:
+// its checksum and raw contents, both keyed by Script.
+type resolved struct {
+	migrations []scan.Migration
+	checksums  map[string]int32
+	contents   map[string][]byte
+}
+
+// resolve discovers migrations and reads each file once, computing its checksum
+// and retaining its bytes for later substitution/splitting.
+func (e *Engine) resolve() (resolved, error) {
 	migs, err := scan.Scan(e.Cfg.Locations, e.scanOptions())
 	if err != nil {
-		return nil, nil, err
+		return resolved{}, err
 	}
-	checksums := make(map[string]int32, len(migs))
+	r := resolved{
+		migrations: migs,
+		checksums:  make(map[string]int32, len(migs)),
+		contents:   make(map[string][]byte, len(migs)),
+	}
 	for _, m := range migs {
 		data, err := os.ReadFile(m.Path)
 		if err != nil {
-			return nil, nil, fmt.Errorf("read %s: %w", m.Script, err)
+			return resolved{}, fmt.Errorf("read %s: %w", m.Script, err)
 		}
-		checksums[m.Script] = checksum.CalculateBytes(data)
+		r.contents[m.Script] = data
+		r.checksums[m.Script] = checksum.CalculateBytes(data)
 	}
-	return migs, checksums, nil
+	return r, nil
 }
 
 // MigrateResult reports what Migrate applied.
@@ -65,7 +79,7 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return MigrateResult{}, err
 	}
-	migs, checksums, err := e.resolve()
+	r, err := e.resolve()
 	if err != nil {
 		return MigrateResult{}, err
 	}
@@ -74,16 +88,16 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 		return MigrateResult{}, err
 	}
 
-	pending := history.Pending(migs, checksums, rows)
+	pending := history.Pending(r.migrations, r.checksums, rows)
 	rank := history.NextRank(rows)
 
 	var result MigrateResult
 	for _, m := range pending {
-		stmts, err := e.prepare(m, checksums)
+		stmts, err := e.prepare(m, r.contents[m.Script])
 		if err != nil {
 			return result, err
 		}
-		row := e.historyRow(m, checksums[m.Script], rank)
+		row := e.historyRow(m, r.checksums[m.Script], rank)
 		if err := e.Conn.ApplyMigration(ctx, e.Cfg.Table, stmts, row); err != nil {
 			return result, fmt.Errorf("migration %s failed: %w", m.Script, err)
 		}
@@ -93,14 +107,10 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	return result, nil
 }
 
-// prepare reads a migration file, substitutes placeholders, and splits it into
-// statements.
-func (e *Engine) prepare(m scan.Migration, _ map[string]int32) ([]string, error) {
-	data, err := os.ReadFile(m.Path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", m.Script, err)
-	}
-	substituted, err := sql.Substitute(string(data), e.Cfg.Placeholders,
+// prepare substitutes placeholders in the migration's (already read) content and
+// splits it into statements.
+func (e *Engine) prepare(m scan.Migration, content []byte) ([]string, error) {
+	substituted, err := sql.Substitute(string(content), e.Cfg.Placeholders,
 		e.Cfg.PlaceholderPrefix, e.Cfg.PlaceholderSuffix, e.Cfg.PlaceholderReplacement)
 	if err != nil {
 		return nil, fmt.Errorf("placeholders in %s: %w", m.Script, err)
@@ -137,7 +147,7 @@ func (e *Engine) Info(ctx context.Context) ([]InfoEntry, error) {
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return nil, err
 	}
-	migs, checksums, err := e.resolve()
+	r, err := e.resolve()
 	if err != nil {
 		return nil, err
 	}
@@ -146,12 +156,12 @@ func (e *Engine) Info(ctx context.Context) ([]InfoEntry, error) {
 		return nil, err
 	}
 	pending := map[string]bool{}
-	for _, m := range history.Pending(migs, checksums, rows) {
+	for _, m := range history.Pending(r.migrations, r.checksums, rows) {
 		pending[m.Script] = true
 	}
 
-	entries := make([]InfoEntry, 0, len(migs))
-	for _, m := range migs {
+	entries := make([]InfoEntry, 0, len(r.migrations))
+	for _, m := range r.migrations {
 		version := ""
 		if m.Version != nil {
 			version = m.Version.String()
@@ -176,7 +186,7 @@ func (e *Engine) Validate(ctx context.Context) ([]history.Problem, error) {
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return nil, err
 	}
-	migs, checksums, err := e.resolve()
+	r, err := e.resolve()
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +194,7 @@ func (e *Engine) Validate(ctx context.Context) ([]history.Problem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return history.Validate(migs, checksums, rows), nil
+	return history.Validate(r.migrations, r.checksums, rows), nil
 }
 
 // Baseline records a baseline row at the configured baseline version, marking
