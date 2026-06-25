@@ -39,7 +39,9 @@ func TestVersionCompare(t *testing.T) {
 		{"1.11", "1.9", 1},
 		{"1", "1.0", 0}, // trailing zeros insignificant
 		{"1.0.0", "1", 0},
-		{"1_0", "1.0", 0}, // '_' and '.' equivalent
+		{"1_0", "1.0", 0},     // '_' and '.' equivalent
+		{"001.002", "1.2", 0}, // leading zeros insignificant
+		{"01", "1", 0},
 		{"1.1", "1", 1},
 		{"2", "10", -1}, // numeric across magnitudes
 		{"20230101", "20230102", -1},
@@ -59,7 +61,7 @@ func TestVersionCompare(t *testing.T) {
 
 func TestVersionCanonical(t *testing.T) {
 	// Versions that Compare-equal must share a canonical key (drives dedup).
-	for _, pair := range [][2]string{{"1", "1.0"}, {"1.0.0", "1_0"}, {"2.10", "2.10.0"}} {
+	for _, pair := range [][2]string{{"1", "1.0"}, {"1.0.0", "1_0"}, {"2.10", "2.10.0"}, {"001.002", "1.2"}, {"01", "1"}} {
 		a, b := mustVersion(t, pair[0]), mustVersion(t, pair[1])
 		if a.canonical() != b.canonical() {
 			t.Errorf("canonical(%q)=%q != canonical(%q)=%q", pair[0], a.canonical(), pair[1], b.canonical())
