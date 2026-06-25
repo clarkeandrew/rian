@@ -1,6 +1,7 @@
 package history
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/clarkeandrew/rian/internal/scan"
@@ -80,6 +81,11 @@ func TestPendingRepeatable(t *testing.T) {
 	if got := Pending(migs, checksums, changed); len(got) != 1 {
 		t.Errorf("changed repeatable should be pending, got %v", scripts(got))
 	}
+	// Last successful application stored a NULL checksum -> re-apply (no nil deref).
+	nullCk := []Row{{InstalledRank: 1, Version: "", Description: "refresh views", Checksum: nil, Success: true}}
+	if got := Pending(migs, checksums, nullCk); len(got) != 1 {
+		t.Errorf("repeatable with NULL stored checksum should be pending, got %v", scripts(got))
+	}
 }
 
 func TestValidateChecksumMismatch(t *testing.T) {
@@ -90,6 +96,51 @@ func TestValidateChecksumMismatch(t *testing.T) {
 	problems := Validate(migs, checksums, rows)
 	if len(problems) != 1 || problems[0].Kind != ChecksumMismatch {
 		t.Fatalf("expected one ChecksumMismatch, got %v", problems)
+	}
+	if problems[0].Script != "V1__init.sql" {
+		t.Errorf("mismatch should name the script, got %q", problems[0].Script)
+	}
+	// Detail reports history-vs-local in that order (444 history, 555 local).
+	if !strings.Contains(problems[0].Detail, "444") || !strings.Contains(problems[0].Detail, "555") {
+		t.Errorf("detail should report both checksums: %q", problems[0].Detail)
+	}
+}
+
+func TestValidateMatchesAcrossVersionFormatting(t *testing.T) {
+	// History stored "1.0"; on-disk version "1". The canonical join must resolve
+	// them so no phantom MissingMigration is raised.
+	migs := []scan.Migration{versioned(t, "1", "init", "V1__init.sql")}
+	checksums := map[string]int32{"V1__init.sql": 7}
+	rows := []Row{{InstalledRank: 1, Version: "1.0", Script: "V1.0__init.sql", Checksum: ptr(7), Success: true}}
+	if problems := Validate(migs, checksums, rows); len(problems) != 0 {
+		t.Fatalf("expected clean validate across 1 == 1.0, got %v", problems)
+	}
+}
+
+func TestValidateNullChecksum(t *testing.T) {
+	// A successful versioned row with a NULL stored checksum is accepted (no
+	// comparison, no panic) — locks in the documented nil-skip behavior.
+	migs := []scan.Migration{versioned(t, "1", "init", "V1__init.sql")}
+	checksums := map[string]int32{"V1__init.sql": 7}
+	rows := []Row{{InstalledRank: 1, Version: "1", Script: "V1__init.sql", Checksum: nil, Success: true}}
+	if problems := Validate(migs, checksums, rows); len(problems) != 0 {
+		t.Fatalf("NULL history checksum should be accepted, got %v", problems)
+	}
+}
+
+func TestValidateRepeatableUnresolved(t *testing.T) {
+	// A successful repeatable row whose description has no local migration is an
+	// unresolved-applied error; but a resolvable repeatable with a DIFFERENT
+	// checksum is fine (Flyway re-applies on change, validate does not fail).
+	local := []scan.Migration{repeatable("kept view", "R__kept_view.sql")}
+	checksums := map[string]int32{"R__kept_view.sql": 1}
+	rows := []Row{
+		{InstalledRank: 1, Version: "", Description: "kept view", Script: "R__kept_view.sql", Checksum: ptr(999), Success: true},     // differing checksum, resolvable -> OK
+		{InstalledRank: 2, Version: "", Description: "deleted view", Script: "R__deleted_view.sql", Checksum: ptr(5), Success: true}, // unresolved
+	}
+	problems := Validate(local, checksums, rows)
+	if len(problems) != 1 || problems[0].Kind != MissingMigration || problems[0].Script != "R__deleted_view.sql" {
+		t.Fatalf("expected one MissingMigration for the deleted repeatable, got %v", problems)
 	}
 }
 
@@ -112,8 +163,18 @@ func TestValidateFailedMigration(t *testing.T) {
 	checksums := map[string]int32{"V1__init.sql": 1}
 	rows := []Row{{InstalledRank: 1, Version: "1", Script: "V1__init.sql", Checksum: ptr(1), Success: false}}
 	problems := Validate(migs, checksums, rows)
-	if len(problems) != 1 || problems[0].Kind != FailedMigration {
-		t.Fatalf("expected one FailedMigration, got %v", problems)
+	if len(problems) != 1 || problems[0].Kind != FailedMigration || problems[0].Script != "V1__init.sql" {
+		t.Fatalf("expected one FailedMigration for V1__init.sql, got %v", problems)
+	}
+}
+
+func TestProblemString(t *testing.T) {
+	p := Problem{Kind: ChecksumMismatch, Script: "V1__init.sql", Detail: "history 1 != local 2"}
+	s := p.String()
+	for _, frag := range []string{string(ChecksumMismatch), "V1__init.sql", "history 1 != local 2"} {
+		if !strings.Contains(s, frag) {
+			t.Errorf("Problem.String() %q missing %q", s, frag)
+		}
 	}
 }
 

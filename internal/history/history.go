@@ -94,9 +94,13 @@ func (p Problem) String() string {
 // checksums maps Script to the locally-computed checksum.
 func Validate(migs []scan.Migration, checksums map[string]int32, rows []Row) []Problem {
 	onDisk := map[string]scan.Migration{}
+	repeatableDescs := map[string]bool{}
 	for _, m := range migs {
-		if m.Type == scan.Versioned {
+		switch m.Type {
+		case scan.Versioned:
 			onDisk[m.Version.Canonical()] = m
+		case scan.Repeatable:
+			repeatableDescs[m.Description] = true
 		}
 	}
 
@@ -107,7 +111,13 @@ func Validate(migs []scan.Migration, checksums map[string]int32, rows []Row) []P
 			continue
 		}
 		if r.Version == "" {
-			continue // repeatable rows are matched by checksum at apply time
+			// Repeatable: resolved by description. A successful row that no longer
+			// maps to any local repeatable is unresolved (Flyway raises this). A
+			// checksum DIFFERENCE is not an error — Flyway re-applies on change.
+			if !repeatableDescs[r.Description] {
+				problems = append(problems, Problem{MissingMigration, r.Script, "repeatable recorded in history but not found on disk"})
+			}
+			continue
 		}
 		rv, err := scan.ParseVersion(r.Version)
 		if err != nil {
