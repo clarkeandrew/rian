@@ -52,6 +52,10 @@ Configuration is merged from `flyway.conf` files, `FLYWAY_*` environment
 variables, and CLI flags, with **flags > env > file** precedence — so existing
 Flyway configuration works unchanged. MySQL URLs use `jdbc:mysql://…`.
 
+Flags accept both Flyway's single-dash long form (`-url`, `-user`, `-locations`)
+and the GNU double-dash form (`--url`), so existing Flyway command lines work
+as-is.
+
 ### Container image
 
 Rian is also published as a static multi-arch (amd64/arm64) image:

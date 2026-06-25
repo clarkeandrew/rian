@@ -21,10 +21,31 @@ import (
 var version = "0.0.0-dev"
 
 func main() {
-	if err := rootCmd().Execute(); err != nil {
+	root := rootCmd()
+	// Accept Flyway-style single-dash long options (e.g. -url, -user) in addition
+	// to cobra's --url, so Rian is a drop-in for existing Flyway command lines.
+	root.SetArgs(normalizeFlywayArgs(os.Args[1:]))
+	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "rian:", err)
 		os.Exit(1)
 	}
+}
+
+// normalizeFlywayArgs rewrites Flyway-style single-dash long options
+// ("-url", "-user=sa") to the double-dash form cobra/pflag expects. Genuine
+// short flags ("-h", "-v"), the "--" terminator, already-double-dashed flags,
+// and non-flag arguments are left unchanged. Rian defines no multi-character
+// short flags, so a single-dash token of length > 2 is always a long option.
+func normalizeFlywayArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		if len(a) > 2 && a[0] == '-' && a[1] != '-' {
+			out[i] = "-" + a
+		} else {
+			out[i] = a
+		}
+	}
+	return out
 }
 
 // cliFlags holds the values bound to the persistent CLI flags.
