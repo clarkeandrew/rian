@@ -63,13 +63,13 @@ func TestVersionCanonical(t *testing.T) {
 	// Versions that Compare-equal must share a canonical key (drives dedup).
 	for _, pair := range [][2]string{{"1", "1.0"}, {"1.0.0", "1_0"}, {"2.10", "2.10.0"}, {"001.002", "1.2"}, {"01", "1"}} {
 		a, b := mustVersion(t, pair[0]), mustVersion(t, pair[1])
-		if a.canonical() != b.canonical() {
-			t.Errorf("canonical(%q)=%q != canonical(%q)=%q", pair[0], a.canonical(), pair[1], b.canonical())
+		if a.Canonical() != b.Canonical() {
+			t.Errorf("Canonical(%q)=%q != Canonical(%q)=%q", pair[0], a.Canonical(), pair[1], b.Canonical())
 		}
 	}
 	// Distinct versions must NOT collide.
 	a, b := mustVersion(t, "1.9"), mustVersion(t, "1.10")
-	if a.canonical() == b.canonical() {
-		t.Errorf("canonical collision for 1.9 and 1.10: %q", a.canonical())
+	if a.Canonical() == b.Canonical() {
+		t.Errorf("Canonical collision for 1.9 and 1.10: %q", a.Canonical())
 	}
 }

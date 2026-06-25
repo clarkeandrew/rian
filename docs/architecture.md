@@ -42,15 +42,18 @@ discover migrations  ->  resolve config + placeholders  ->  compute checksums
 ## The `Dialect` boundary
 
 The only database-specific surface is the `Dialect` interface in `internal/db`.
-Adding a new database = implementing this interface. It abstracts:
+Adding a new database = implementing this interface. It currently abstracts:
 
-- connection establishment (DSN/URL parsing, TLS),
+- the dialect name,
 - identifier quoting,
 - whether DDL is transactional (drives rollback strategy),
-- creating and reading the schema-history table.
+- the schema-history SQL: `CreateHistoryTableSQL`, `SelectHistorySQL`, and the
+  parameterized `InsertHistorySQL` (Postgres uses `$1..$9`; MySQL will use `?`).
 
-The `engine` and `history` packages depend only on `Dialect`, never on a
-concrete driver.
+These methods are pure (string-returning), so they are unit-tested without a
+database. Live connection/exec wiring (pgx for Postgres) is added with the
+engine, which is the first consumer that needs an open connection. The `engine`
+and `history` packages depend only on `Dialect`, never on a concrete driver.
 
 ## Key invariants
 

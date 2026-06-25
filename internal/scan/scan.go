@@ -184,7 +184,7 @@ func Scan(locations []string, opts Options) ([]Migration, error) {
 			}
 			m.Path = path
 			if m.Type == Versioned {
-				key := m.Version.canonical()
+				key := m.Version.Canonical()
 				if prev, dup := seen[key]; dup {
 					return fmt.Errorf("duplicate migration version %s: %q and %q", m.Version, prev, m.Script)
 				}

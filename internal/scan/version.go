@@ -71,10 +71,10 @@ func (v *Version) Compare(o *Version) int {
 	return 0
 }
 
-// canonical returns a separator- and trailing-zero-normalized key so that
+// Canonical returns a separator- and trailing-zero-normalized key so that
 // versions which Compare as equal ("1", "1.0", "1_0") share one key. Used for
-// duplicate detection.
-func (v *Version) canonical() string {
+// duplicate detection and for matching against schema-history version strings.
+func (v *Version) Canonical() string {
 	end := len(v.parts)
 	for end > 0 && v.parts[end-1].Sign() == 0 {
 		end--
