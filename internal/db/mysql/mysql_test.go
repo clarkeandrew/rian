@@ -3,6 +3,8 @@ package mysql
 import (
 	"strings"
 	"testing"
+
+	gomysql "github.com/go-sql-driver/mysql"
 )
 
 func TestNameAndCapabilities(t *testing.T) {
@@ -83,27 +85,61 @@ func TestSelectHistorySQL(t *testing.T) {
 	}
 }
 
+// TestDSN round-trips the produced DSN back through the driver's ParseDSN and
+// asserts the decoded fields, which is more robust than string equality and
+// guarantees the output is actually parseable by go-sql-driver.
 func TestDSN(t *testing.T) {
 	tests := []struct {
 		name           string
 		url, user, pwd string
-		want           string
+		wantUser       string
+		wantPasswd     string
+		wantAddr       string
+		wantDB         string
+		wantParams     map[string]string
 	}{
-		{"basic with creds", "jdbc:mysql://localhost:3306/app", "root", "secret", "root:secret@tcp(localhost:3306)/app"},
-		{"user only", "jdbc:mysql://db:3306/app", "root", "", "root@tcp(db:3306)/app"},
-		{"with query params", "jdbc:mysql://h:3306/app?parseTime=true&tls=skip-verify", "u", "p", "u:p@tcp(h:3306)/app?parseTime=true&tls=skip-verify"},
-		{"creds embedded in url", "jdbc:mysql://u:p@h:3306/app", "", "", "u:p@tcp(h:3306)/app"},
-		{"explicit overrides embedded", "jdbc:mysql://u:p@h:3306/app", "admin", "x", "admin:x@tcp(h:3306)/app"},
-		{"no jdbc prefix", "mysql://h:3306/app", "u", "p", "u:p@tcp(h:3306)/app"},
+		{"basic with creds", "jdbc:mysql://localhost:3306/app", "root", "secret", "root", "secret", "localhost:3306", "app", nil},
+		{"user only", "jdbc:mysql://db:3306/app", "root", "", "root", "", "db:3306", "app", nil},
+		// An unknown param is preserved in Params through the round-trip.
+		{"custom param", "jdbc:mysql://h:3306/app?appName=rian", "u", "p", "u", "p", "h:3306", "app", map[string]string{"appName": "rian"}},
+		{"creds embedded", "jdbc:mysql://u:p@h:3306/app", "", "", "u", "p", "h:3306", "app", nil},
+		{"explicit overrides embedded", "jdbc:mysql://u:p@h:3306/app", "admin", "x", "admin", "x", "h:3306", "app", nil},
+		{"no jdbc prefix", "mysql://h:3306/app", "u", "p", "u", "p", "h:3306", "app", nil},
+		// Port-less host (a common real Flyway form) -> driver appends default :3306.
+		{"portless host", "jdbc:mysql://localhost/app", "u", "p", "u", "p", "localhost:3306", "app", nil},
+		// Special characters in the password must survive the round-trip.
+		{"special-char password", "jdbc:mysql://h:3306/app", "u", "p@:ss", "u", "p@:ss", "h:3306", "app", nil},
 	}
 	for _, tt := range tests {
-		got, err := DSN(tt.url, tt.user, tt.pwd)
-		if err != nil {
-			t.Errorf("%s: %v", tt.name, err)
-			continue
-		}
-		if got != tt.want {
-			t.Errorf("%s: DSN = %q, want %q", tt.name, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			dsn, err := DSN(tt.url, tt.user, tt.pwd)
+			if err != nil {
+				t.Fatalf("DSN error: %v", err)
+			}
+			cfg, err := gomysql.ParseDSN(dsn)
+			if err != nil {
+				t.Fatalf("produced DSN %q not parseable: %v", dsn, err)
+			}
+			if cfg.User != tt.wantUser || cfg.Passwd != tt.wantPasswd {
+				t.Errorf("creds = %q/%q, want %q/%q", cfg.User, cfg.Passwd, tt.wantUser, tt.wantPasswd)
+			}
+			if cfg.Addr != tt.wantAddr {
+				t.Errorf("addr = %q, want %q", cfg.Addr, tt.wantAddr)
+			}
+			if cfg.DBName != tt.wantDB {
+				t.Errorf("db = %q, want %q", cfg.DBName, tt.wantDB)
+			}
+			for k, v := range tt.wantParams {
+				if cfg.Params[k] != v {
+					t.Errorf("param %q = %q, want %q", k, cfg.Params[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestDSNMissingHostErrors(t *testing.T) {
+	if _, err := DSN("jdbc:mysql:///app", "u", "p"); err == nil {
+		t.Error("expected error for missing host, got nil")
 	}
 }

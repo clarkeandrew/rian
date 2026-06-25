@@ -8,28 +8,40 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	gomysql "github.com/go-sql-driver/mysql"
 
 	"github.com/clarkeandrew/rian/internal/db"
 	"github.com/clarkeandrew/rian/internal/history"
 )
 
+// executor is the exec-only subset of *sql.DB used by ApplyMigration,
+// InsertHistory, and DeleteFailed, so those paths are unit-testable with a fake.
+type executor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // Conn is a database/sql-backed MySQL connection implementing db.Conn.
 type Conn struct {
 	db      *sql.DB
+	exec    executor // defaults to db; overridable in tests
 	dialect Dialect
 }
 
 var _ db.Conn = (*Conn)(nil)
 
 // DSN converts a Flyway-style JDBC URL ("jdbc:mysql://host:port/db?params") into
-// the go-sql-driver DSN ("user:pass@tcp(host:port)/db?params"). Explicit
-// user/password override any credentials embedded in the URL.
+// the go-sql-driver DSN. Explicit user/password override any credentials
+// embedded in the URL. The DSN is assembled through the driver's structured
+// mysql.Config (not string concatenation) so credentials with special
+// characters and the password-without-username case are handled correctly.
 func DSN(jdbcURL, user, password string) (string, error) {
 	s := strings.TrimPrefix(jdbcURL, "jdbc:")
 	u, err := url.Parse(s)
 	if err != nil {
 		return "", fmt.Errorf("parse mysql url: %w", err)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("mysql url %q is missing a host", jdbcURL)
 	}
 	if u.User != nil {
 		if user == "" {
@@ -41,20 +53,26 @@ func DSN(jdbcURL, user, password string) (string, error) {
 			}
 		}
 	}
-	cred := ""
-	if user != "" {
-		cred = user
-		if password != "" {
-			cred += ":" + password
-		}
-		cred += "@"
-	}
-	dbname := strings.TrimPrefix(u.Path, "/")
-	dsn := fmt.Sprintf("%stcp(%s)/%s", cred, u.Host, dbname)
+
+	cfg := gomysql.NewConfig()
+	cfg.Net = "tcp"
+	cfg.Addr = u.Host
+	cfg.User = user
+	cfg.Passwd = password
+	cfg.DBName = strings.TrimPrefix(u.Path, "/")
 	if u.RawQuery != "" {
-		dsn += "?" + u.RawQuery
+		params, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			return "", fmt.Errorf("parse mysql url params: %w", err)
+		}
+		cfg.Params = make(map[string]string, len(params))
+		for k, vs := range params {
+			if len(vs) > 0 {
+				cfg.Params[k] = vs[0]
+			}
+		}
 	}
-	return dsn, nil
+	return cfg.FormatDSN(), nil
 }
 
 // Connect opens a MySQL connection.
@@ -71,7 +89,7 @@ func Connect(ctx context.Context, jdbcURL, user, password string) (*Conn, error)
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("connect mysql: %w", err)
 	}
-	return &Conn{db: sqlDB}, nil
+	return &Conn{db: sqlDB, exec: sqlDB}, nil
 }
 
 func (c *Conn) Dialect() db.Dialect { return c.dialect }
@@ -120,7 +138,7 @@ func (c *Conn) ApplyMigration(ctx context.Context, table string, statements []st
 	start := time.Now()
 	var execErr error
 	for _, stmt := range statements {
-		if _, err := c.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := c.exec.ExecContext(ctx, stmt); err != nil {
 			execErr = fmt.Errorf("apply %s: %w", row.Script, err)
 			break
 		}
@@ -138,19 +156,22 @@ func (c *Conn) ApplyMigration(ctx context.Context, table string, statements []st
 }
 
 func (c *Conn) InsertHistory(ctx context.Context, table string, row history.Row) error {
-	if _, err := c.db.ExecContext(ctx, c.dialect.InsertHistorySQL(table), insertArgs(row)...); err != nil {
+	if _, err := c.exec.ExecContext(ctx, c.dialect.InsertHistorySQL(table), insertArgs(row)...); err != nil {
 		return fmt.Errorf("insert history row: %w", err)
 	}
 	return nil
 }
 
 func (c *Conn) DeleteFailed(ctx context.Context, table string) (int, error) {
-	res, err := c.db.ExecContext(ctx,
+	res, err := c.exec.ExecContext(ctx,
 		"DELETE FROM "+c.dialect.QuoteIdentifier(table)+" WHERE `success` = false")
 	if err != nil {
 		return 0, fmt.Errorf("delete failed rows: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
 	return int(n), nil
 }
 

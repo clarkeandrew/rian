@@ -48,3 +48,52 @@ jobs:
             exit 1
           fi
           echo "OK: rian is statically linked"
+
+  cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    env:
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          check-latest: true
+      - name: Build (CGO_ENABLED=0)
+        run: go build -o /dev/null ./cmd/rian
+
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          check-latest: true
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "v2.4.4"
+          args: build --snapshot --clean
+      - name: Assert release binaries are static
+        run: |
+          set -e
+          found=0
+          for bin in $(find dist -type f -name rian); do
+            found=1
+            echo "checking $bin"
+            file "$bin"
+            file "$bin" | grep -qi "statically linked\|Go BuildID\|PE32\|Mach-O" || true
+          done
+          if [ "$found" = "0" ]; then echo "no rian binaries built"; exit 1; fi
+          # The linux/amd64 build must be statically linked.
+          lin=$(find dist -type f -path '*linux_amd64*' -name rian | head -1)
+          file "$lin" | grep -qi "statically linked" || { echo "linux/amd64 not static"; exit 1; }
+          echo "OK: goreleaser snapshot built; linux/amd64 is static"

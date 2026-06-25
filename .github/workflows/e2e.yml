@@ -1,0 +1,122 @@
+name: e2e
+
+# End-to-end Flyway-compatibility tests: the open-source Flyway image applies the
+# first migrations, then Rian applies the rest against the SAME database and
+# validates with zero checksum mismatches (drop-in handoff). Flyway then
+# validates Rian's work (reverse handoff). Proves checksum + schema-history
+# parity against real Postgres and MySQL.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  FLYWAY_VERSION: "10.17.0"
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: rian
+          POSTGRES_PASSWORD: rian
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rian -d app"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      JDBC: jdbc:postgresql://localhost:5432/app
+      SQL: ${{ github.workspace }}/test/e2e/sql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          check-latest: true
+
+      - name: Build rian
+        run: CGO_ENABLED=0 go build -o rian ./cmd/rian
+
+      - name: Flyway applies V1..V2 (target=2)
+        run: |
+          docker run --rm --network host -v "$SQL":/flyway/sql \
+            flyway/flyway:${FLYWAY_VERSION} \
+            -url="$JDBC" -user=rian -password=rian -target=2 -baselineOnMigrate=false migrate
+
+      - name: Rian validates Flyway's history (checksum parity)
+        run: ./rian validate -url="$JDBC" -user=rian -password=rian -locations="filesystem:$SQL"
+
+      - name: Rian applies the remaining migration (V3)
+        run: |
+          ./rian migrate -url="$JDBC" -user=rian -password=rian -locations="filesystem:$SQL"
+          ./rian info -url="$JDBC" -user=rian -password=rian -locations="filesystem:$SQL"
+
+      - name: Flyway validates Rian's history (reverse handoff)
+        run: |
+          docker run --rm --network host -v "$SQL":/flyway/sql \
+            flyway/flyway:${FLYWAY_VERSION} \
+            -url="$JDBC" -user=rian -password=rian validate
+
+      - name: Rian round-trip Go e2e
+        run: go test -tags e2e ./test/e2e/...
+        env:
+          RIAN_E2E_POSTGRES_URL: jdbc:postgresql://localhost:5432/app
+
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: app
+          MYSQL_USER: rian
+          MYSQL_PASSWORD: rian
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 3s --health-timeout 3s --health-retries 30
+    env:
+      JDBC: jdbc:mysql://localhost:3306/app
+      SQL: ${{ github.workspace }}/test/e2e/sql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          check-latest: true
+
+      - name: Build rian
+        run: CGO_ENABLED=0 go build -o rian ./cmd/rian
+
+      - name: Flyway applies V1..V2 (target=2)
+        run: |
+          docker run --rm --network host -v "$SQL":/flyway/sql \
+            flyway/flyway:${FLYWAY_VERSION} \
+            -url="$JDBC" -user=rian -password=rian -target=2 migrate
+
+      - name: Rian validates Flyway's history (checksum parity)
+        run: ./rian validate -url="$JDBC" -user=rian -password=rian -locations="filesystem:$SQL"
+
+      - name: Rian applies the remaining migration (V3)
+        run: |
+          ./rian migrate -url="$JDBC" -user=rian -password=rian -locations="filesystem:$SQL"
+          ./rian info -url="$JDBC" -user=rian -password=rian -locations="filesystem:$SQL"
+
+      - name: Flyway validates Rian's history (reverse handoff)
+        run: |
+          docker run --rm --network host -v "$SQL":/flyway/sql \
+            flyway/flyway:${FLYWAY_VERSION} \
+            -url="$JDBC" -user=rian -password=rian validate
+
+      - name: Rian round-trip Go e2e
+        run: go test -tags e2e ./test/e2e/...
+        env:
+          RIAN_E2E_MYSQL_URL: jdbc:mysql://localhost:3306/app

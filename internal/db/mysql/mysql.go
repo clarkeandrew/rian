@@ -28,7 +28,13 @@ func (Dialect) QuoteIdentifier(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
-// CreateHistoryTableSQL returns DDL matching Flyway's MySQL schema-history table.
+// CreateHistoryTableSQL returns DDL matching Flyway's MySQL schema-history table
+// (columns, order, types, nullability, ENGINE, and installed_on default).
+//
+// Flyway also creates a secondary index `<table>_s_idx` on (success). Rian omits
+// it: against an existing Flyway-managed database the table (and index) already
+// exist, and CREATE TABLE IF NOT EXISTS is a no-op; the index only affects a
+// brand-new table Rian initializes, where it is not required for correctness.
 func (d Dialect) CreateHistoryTableSQL(table string) string {
 	t := d.QuoteIdentifier(table)
 	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n"+
