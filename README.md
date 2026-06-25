@@ -20,7 +20,7 @@ so your database state stays traceable, repeatable, and easy to reason about.
 
 ## Status
 
-Early development. The first milestone targets:
+The first milestone is implemented:
 
 - Versioned (`V<version>__<desc>.sql`) and repeatable (`R__<desc>.sql`) SQL
   migrations
@@ -28,12 +28,41 @@ Early development. The first milestone targets:
 - `${placeholder}` substitution and `flyway.conf` / `FLYWAY_*` / flag config
 - PostgreSQL and MySQL
 
+## Usage
+
+```sh
+# Apply all pending migrations
+rian migrate \
+  --url jdbc:postgresql://localhost:5432/app \
+  --user app --password secret \
+  --locations filesystem:./sql
+
+# See what is applied vs pending
+rian info --url jdbc:postgresql://localhost:5432/app --user app --password secret
+
+# Verify applied migrations still match the local files (checksums)
+rian validate ...
+
+# Baseline an existing database, or clear failed entries
+rian baseline ...
+rian repair ...
+```
+
+Configuration is merged from `flyway.conf` files, `FLYWAY_*` environment
+variables, and CLI flags, with **flags > env > file** precedence — so existing
+Flyway configuration works unchanged. MySQL URLs use `jdbc:mysql://…`.
+
 ## Building
 
 ```sh
-CGO_ENABLED=0 go build ./cmd/rian
-go test ./...
+CGO_ENABLED=0 go build ./cmd/rian   # static binary
+go test ./...                       # unit + golden tests
 ```
+
+End-to-end Flyway-parity tests (real Flyway image hands off to Rian against live
+Postgres and MySQL) live in `.github/workflows/e2e.yml` and `test/e2e/`; run them
+locally with `docker compose up -d` then
+`go test -tags e2e ./test/e2e/...` with the `RIAN_E2E_*_URL` env vars set.
 
 ## Compatibility
 
