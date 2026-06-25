@@ -52,6 +52,18 @@ Configuration is merged from `flyway.conf` files, `FLYWAY_*` environment
 variables, and CLI flags, with **flags > env > file** precedence — so existing
 Flyway configuration works unchanged. MySQL URLs use `jdbc:mysql://…`.
 
+### Container image
+
+Rian is also published as a static multi-arch (amd64/arm64) image:
+
+```sh
+docker run --rm ghcr.io/clarkeandrew/rian:latest \
+  migrate --url jdbc:postgresql://db:5432/app --user app --password secret \
+  --locations filesystem:/sql
+```
+
+Mount your migrations into the container (e.g. `-v "$PWD/sql:/sql"`).
+
 ## Building
 
 ```sh

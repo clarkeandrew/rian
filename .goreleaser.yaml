@@ -39,6 +39,47 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Multi-arch container image. GoReleaser builds one image per arch from the
+# prebuilt static binary, then docker_manifests stitches them into a single
+# multi-arch tag. Image path is hardcoded lowercase (GHCR rejects uppercase).
+dockers:
+  - id: rian-amd64
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/clarkeandrew/rian:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.source=https://github.com/clarkeandrew/rian"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=MIT"
+  - id: rian-arm64
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/clarkeandrew/rian:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.source=https://github.com/clarkeandrew/rian"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=MIT"
+
+docker_manifests:
+  - name_template: "ghcr.io/clarkeandrew/rian:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/clarkeandrew/rian:{{ .Version }}-amd64"
+      - "ghcr.io/clarkeandrew/rian:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/clarkeandrew/rian:latest"
+    image_templates:
+      - "ghcr.io/clarkeandrew/rian:{{ .Version }}-amd64"
+      - "ghcr.io/clarkeandrew/rian:{{ .Version }}-arm64"
+
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
 
@@ -53,3 +94,4 @@ changelog:
 
 release:
   draft: true
+  prerelease: auto

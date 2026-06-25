@@ -61,6 +61,12 @@ so your database state stays traceable, repeatable, and easy to reason about.
 - `go test ./...` for unit and golden tests.
 - `gofmt`/`go vet` must be clean.
 
+## Releases
+
+- Releases are automated from Conventional Commits on `main` (`feat` → minor,
+  `fix` → patch; pre-1.0 stays in 0.x). Do not bump versions by hand. See
+  `docs/releasing.md`.
+
 ## Compatibility notes (for contributors)
 
 - The migration **checksum must match Flyway's `ChecksumCalculator` exactly** or
