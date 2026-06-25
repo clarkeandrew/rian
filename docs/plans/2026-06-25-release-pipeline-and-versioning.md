@@ -32,7 +32,7 @@ consumes that version number (see `docs/releasing.md`).
 - `Dockerfile` (new) — distroless/static, `COPY rian`.
 - `.goreleaser.yaml` — `dockers` (amd64/arm64) + `docker_manifests`; keep draft.
 - `.github/workflows/release.yml` (new) — svu + GoReleaser, pinned to the same
-  GoReleaser version as `ci.yml` (v2.4.4).
+  GoReleaser version as `build-and-test.yml` (v2.4.4).
 - `docs/releasing.md`, README container note.
 
 ## Verification

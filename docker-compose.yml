@@ -5,7 +5,7 @@
 #   RIAN_E2E_MYSQL_URL='jdbc:mysql://localhost:3306/app' \
 #     go test -tags e2e ./test/e2e/...
 #
-# See .github/workflows/e2e.yml for the full Flyway -> Rian handoff test.
+# See .github/workflows/e2e-tests.yml for the full Flyway -> Rian handoff test.
 services:
   postgres:
     image: postgres:16

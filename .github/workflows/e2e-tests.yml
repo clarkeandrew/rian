@@ -1,4 +1,4 @@
-name: e2e
+name: "[Test] E2E Tests"
 
 # End-to-end Flyway-compatibility tests. The open-source Flyway image applies the
 # first migrations, then Rian applies the rest against the SAME database and

@@ -76,7 +76,7 @@ go test ./...                       # unit + golden tests
 ```
 
 End-to-end Flyway-parity tests (real Flyway image hands off to Rian against live
-Postgres and MySQL) live in `.github/workflows/e2e.yml` and `test/e2e/`; run them
+Postgres and MySQL) live in `.github/workflows/e2e-tests.yml` and `test/e2e/`; run them
 locally with `docker compose up -d` then
 `go test -tags e2e ./test/e2e/...` with the `RIAN_E2E_*_URL` env vars set.
 
