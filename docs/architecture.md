@@ -87,3 +87,7 @@ and disabled by default), and databases beyond PostgreSQL and MySQL.
   static single-binary distribution goal. See
   `docs/plans/2026-06-25-initial-project-outline-and-tech-stack.md`.
 - **MIT license:** permissive, compatible with all chosen drivers.
+- **MySQL driver (go-sql-driver/mysql, MPL-2.0):** used unmodified so the only
+  copyleft obligation (publishing modified MPL files) never triggers. MySQL DDL
+  implicitly commits, so its dialect reports non-transactional DDL and a failed
+  migration records `success=false` and requires `repair`.

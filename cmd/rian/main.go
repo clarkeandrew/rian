@@ -12,6 +12,7 @@ import (
 
 	"github.com/clarkeandrew/rian/internal/config"
 	"github.com/clarkeandrew/rian/internal/db"
+	"github.com/clarkeandrew/rian/internal/db/mysql"
 	"github.com/clarkeandrew/rian/internal/db/postgres"
 	"github.com/clarkeandrew/rian/internal/engine"
 )
@@ -110,18 +111,20 @@ func (f *cliFlags) open(cmd *cobra.Command, ctx context.Context) (*engine.Engine
 	return engine.New(conn, cfg), cleanup, nil
 }
 
-// connect selects a dialect from the URL scheme. Only PostgreSQL is wired up so
-// far; MySQL follows.
+// connect selects a dialect from the URL scheme (PostgreSQL or MySQL).
 func connect(ctx context.Context, cfg config.Config) (db.Conn, error) {
 	switch {
 	case strings.HasPrefix(cfg.URL, "jdbc:postgresql:"),
 		strings.HasPrefix(cfg.URL, "postgres://"),
 		strings.HasPrefix(cfg.URL, "postgresql://"):
 		return postgres.Connect(ctx, cfg.URL, cfg.User, cfg.Password)
+	case strings.HasPrefix(cfg.URL, "jdbc:mysql:"),
+		strings.HasPrefix(cfg.URL, "mysql://"):
+		return mysql.Connect(ctx, cfg.URL, cfg.User, cfg.Password)
 	case cfg.URL == "":
 		return nil, fmt.Errorf("no database url provided (set -url, FLYWAY_URL, or flyway.url)")
 	default:
-		return nil, fmt.Errorf("unsupported database url %q (only PostgreSQL is supported so far)", cfg.URL)
+		return nil, fmt.Errorf("unsupported database url %q (supported: PostgreSQL, MySQL)", cfg.URL)
 	}
 }
 
