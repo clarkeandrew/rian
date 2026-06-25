@@ -178,6 +178,18 @@ func TestProblemString(t *testing.T) {
 	}
 }
 
+func TestValidateUnparseableVersion(t *testing.T) {
+	// A successful row whose stored version Rian cannot parse must be reported,
+	// not silently skipped (which would suppress the checksum comparison).
+	migs := []scan.Migration{versioned(t, "1", "init", "V1__init.sql")}
+	checksums := map[string]int32{"V1__init.sql": 1}
+	rows := []Row{{InstalledRank: 1, Version: "not.a.number", Script: "Vbad.sql", Checksum: ptr(1), Success: true}}
+	problems := Validate(migs, checksums, rows)
+	if len(problems) != 1 || problems[0].Kind != MissingMigration {
+		t.Fatalf("expected one problem for unparseable version, got %v", problems)
+	}
+}
+
 func TestValidateClean(t *testing.T) {
 	migs := []scan.Migration{versioned(t, "1", "init", "V1__init.sql")}
 	checksums := map[string]int32{"V1__init.sql": 7}

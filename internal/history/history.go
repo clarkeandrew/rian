@@ -121,6 +121,11 @@ func Validate(migs []scan.Migration, checksums map[string]int32, rows []Row) []P
 		}
 		rv, err := scan.ParseVersion(r.Version)
 		if err != nil {
+			// A version Rian cannot parse must surface, not silently skip the
+			// checksum check — otherwise a parse divergence from Flyway would
+			// validate "successfully" while comparing nothing.
+			problems = append(problems, Problem{MissingMigration, r.Script,
+				fmt.Sprintf("unparseable version %q in history: %v", r.Version, err)})
 			continue
 		}
 		m, ok := onDisk[rv.Canonical()]

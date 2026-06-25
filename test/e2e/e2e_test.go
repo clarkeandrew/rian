@@ -61,7 +61,10 @@ func runRoundTrip(t *testing.T, kind, url string) {
 
 	eng := engine.New(conn, cfg)
 
-	// This test expects a fresh database (CI uses throwaway service containers).
+	// This is a self-consistency check of Rian against the real driver and must
+	// run on a FRESH database (the e2e `go-roundtrip` job uses dedicated service
+	// containers). The cross-tool Flyway<->Rian parity proof lives in the
+	// docker/CLI steps of the e2e workflow, not here.
 	res, err := eng.Migrate(ctx)
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
