@@ -1,7 +1,12 @@
 name: "[Docs] Publish Pages"
 
 # Deploys the static site in site/ to GitHub Pages.
-# Requires Pages to be enabled once: Settings -> Pages -> Source: GitHub Actions.
+#
+# One-time setup (the Actions token cannot do this itself): in the repository,
+# go to Settings -> Pages -> "Build and deployment" -> Source: GitHub Actions.
+# Pages on a private repo needs a paid plan; making the repo public enables it
+# on the free plan (and is required for the download links to work for visitors).
+# After that, this workflow deploys on every push that touches site/.
 
 on:
   push:
@@ -29,8 +34,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
