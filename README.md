@@ -68,6 +68,27 @@ docker run --rm ghcr.io/clarkeandrew/rian:latest \
 
 Mount your migrations into the container (e.g. `-v "$PWD/sql:/sql"`).
 
+## GitHub Action
+
+Run migrations from a workflow with the `clarkeandrew/rian` action. It downloads
+the matching release binary for the runner (Linux, macOS, or Windows) and runs
+the command you ask for:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: clarkeandrew/rian@v0.1.1
+  with:
+    command: migrate
+    url: jdbc:postgresql://localhost:5432/app
+    user: app
+    password: ${{ secrets.DB_PASSWORD }}
+    locations: filesystem:./sql
+```
+
+Inputs: `version` (default `latest`), `command` (default `migrate`), `url`,
+`user`, `password`, `locations`, `table`, `args` (extra flags), and
+`working-directory`. Pin `version` to a release tag for reproducible runs.
+
 ## Building
 
 ```sh

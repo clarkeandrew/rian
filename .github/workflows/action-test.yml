@@ -1,0 +1,51 @@
+name: "[Test] Action"
+
+# Exercises the composite action (./) end-to-end: it downloads the latest
+# released rian binary and runs migrate + validate against a real Postgres.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "action.yml"
+      - ".github/workflows/action-test.yml"
+      - "test/e2e/sql/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: rian
+          POSTGRES_PASSWORD: rian
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rian -d app"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Migrate (via the action)
+        uses: ./
+        with:
+          command: migrate
+          url: jdbc:postgresql://localhost:5432/app
+          user: rian
+          password: rian
+          locations: filesystem:${{ github.workspace }}/test/e2e/sql
+
+      - name: Validate (via the action)
+        uses: ./
+        with:
+          command: validate
+          url: jdbc:postgresql://localhost:5432/app
+          user: rian
+          password: rian
+          locations: filesystem:${{ github.workspace }}/test/e2e/sql

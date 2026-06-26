@@ -1,0 +1,117 @@
+name: "Rian database migrations"
+description: "Run Rian, a Flyway-compatible database migration tool, in a workflow."
+author: "clarkeandrew"
+branding:
+  icon: "database"
+  color: "blue"
+
+inputs:
+  version:
+    description: "Rian release to use (e.g. v0.1.1), or 'latest' for the newest release."
+    required: false
+    default: "latest"
+  command:
+    description: "Rian subcommand: migrate, info, validate, baseline, or repair."
+    required: false
+    default: "migrate"
+  url:
+    description: "Database URL, e.g. jdbc:postgresql://host:5432/db or jdbc:mysql://host:3306/db."
+    required: false
+    default: ""
+  user:
+    description: "Database user."
+    required: false
+    default: ""
+  password:
+    description: "Database password."
+    required: false
+    default: ""
+  locations:
+    description: "Migration locations, e.g. filesystem:./sql."
+    required: false
+    default: ""
+  table:
+    description: "Schema-history table name."
+    required: false
+    default: ""
+  args:
+    description: "Extra arguments appended to the rian command."
+    required: false
+    default: ""
+  working-directory:
+    description: "Directory in which to run rian."
+    required: false
+    default: "."
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run Rian
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RIAN_VERSION: ${{ inputs.version }}
+        RIAN_COMMAND: ${{ inputs.command }}
+        RIAN_URL: ${{ inputs.url }}
+        RIAN_USER: ${{ inputs.user }}
+        RIAN_PASSWORD: ${{ inputs.password }}
+        RIAN_LOCATIONS: ${{ inputs.locations }}
+        RIAN_TABLE: ${{ inputs.table }}
+        RIAN_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        repo="clarkeandrew/rian"
+
+        ver="${RIAN_VERSION:-latest}"
+        if [ -z "$ver" ] || [ "$ver" = "latest" ]; then
+          ver="$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" \
+                 | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
+        fi
+        if [ -z "$ver" ]; then
+          echo "::error::could not resolve a rian release version"; exit 1
+        fi
+        v="${ver#v}"
+
+        case "${RUNNER_OS}" in
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows) os=windows ;;
+          *) echo "::error::unsupported runner OS ${RUNNER_OS}"; exit 1 ;;
+        esac
+        case "${RUNNER_ARCH}" in
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::unsupported runner arch ${RUNNER_ARCH}"; exit 1 ;;
+        esac
+        if [ "$os" = "windows" ]; then ext="zip"; else ext="tar.gz"; fi
+
+        asset="rian_${v}_${os}_${arch}.${ext}"
+        url="https://github.com/${repo}/releases/download/${ver}/${asset}"
+        tmp="$(mktemp -d)"
+        echo "::group::Download rian ${ver} (${os}/${arch})"
+        echo "$url"
+        curl -fsSL "$url" -o "${tmp}/${asset}"
+        if [ "$ext" = "zip" ]; then
+          unzip -q "${tmp}/${asset}" -d "${tmp}"
+        else
+          tar -xzf "${tmp}/${asset}" -C "${tmp}"
+        fi
+        echo "::endgroup::"
+
+        bin="${tmp}/rian"
+        [ "$os" = "windows" ] && bin="${tmp}/rian.exe"
+        chmod +x "$bin" 2>/dev/null || true
+
+        args=( "${RIAN_COMMAND}" )
+        if [ -n "${RIAN_URL}" ];       then args+=( "-url=${RIAN_URL}" ); fi
+        if [ -n "${RIAN_USER}" ];      then args+=( "-user=${RIAN_USER}" ); fi
+        if [ -n "${RIAN_PASSWORD}" ];  then args+=( "-password=${RIAN_PASSWORD}" ); fi
+        if [ -n "${RIAN_LOCATIONS}" ]; then args+=( "-locations=${RIAN_LOCATIONS}" ); fi
+        if [ -n "${RIAN_TABLE}" ];     then args+=( "-table=${RIAN_TABLE}" ); fi
+        # Extra args are intentionally word-split.
+        # shellcheck disable=SC2206
+        if [ -n "${RIAN_ARGS}" ];      then args+=( ${RIAN_ARGS} ); fi
+
+        echo "::group::rian ${RIAN_COMMAND}"
+        "$bin" "${args[@]}"
+        echo "::endgroup::"
