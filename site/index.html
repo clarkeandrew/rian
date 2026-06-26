@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rian — a Flyway-compatible migration runner</title>
+<meta name="description" content="Rian is a tiny, Flyway-compatible database migration runner: a single static Go binary for PostgreSQL and MySQL.">
+<style>
+  :root {
+    --fg: #1b1b1b;
+    --muted: #5c5c5c;
+    --bg: #ffffff;
+    --accent: #2d6df6;
+    --line: #e6e6e6;
+    --code-bg: #f5f5f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e8e8e6;
+      --muted: #9a9a96;
+      --bg: #16161a;
+      --accent: #6ea0ff;
+      --line: #2a2a30;
+      --code-bg: #1f1f25;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    color: var(--fg);
+    background: var(--bg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: 4rem 1.25rem 5rem; }
+  h1 { font-size: 2.4rem; margin: 0 0 .25rem; letter-spacing: -0.02em; }
+  h2 { font-size: 1.25rem; margin: 2.75rem 0 .75rem; letter-spacing: -0.01em; }
+  p { margin: 0 0 1rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .tagline { color: var(--muted); font-size: 1.15rem; margin-bottom: 2rem; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    background: var(--code-bg);
+    padding: .15em .4em;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; font-size: 0.875rem; }
+  .download {
+    display: inline-block;
+    margin: .25rem 0 1rem;
+    padding: .6rem 1.1rem;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .download:hover { background: var(--accent); color: #fff; text-decoration: none; }
+  ul { padding-left: 1.2rem; }
+  li { margin: .25rem 0; }
+  footer {
+    margin-top: 3.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+  footer p { margin: 0 0 .6rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Rian</h1>
+  <p class="tagline">A tiny, Flyway-compatible database migration runner.</p>
+
+  <p>
+    Rian applies SQL migrations and records them in a Flyway-compatible
+    <code>flyway_schema_history</code> table. It ships as a single static binary
+    — no JVM, no runtime — so it drops into a minimal container or a CI job.
+    Point it at a database an existing Flyway already manages and it reads the
+    same migration files and computes the same checksums.
+  </p>
+  <p>PostgreSQL and MySQL are supported.</p>
+
+  <h2>Install</h2>
+
+  <p>Download a prebuilt binary for your platform:</p>
+  <a class="download" href="https://github.com/clarkeandrew/rian/releases/latest">Latest release →</a>
+  <p>Builds are published for Linux, macOS, and Windows on both amd64 and arm64.</p>
+
+  <p>Or pull the container image:</p>
+  <pre><code>docker pull ghcr.io/clarkeandrew/rian:latest</code></pre>
+
+  <p>Or install from source with Go:</p>
+  <pre><code>go install github.com/clarkeandrew/rian/cmd/rian@latest</code></pre>
+
+  <h2>Usage</h2>
+
+  <pre><code>rian migrate \
+  -url jdbc:postgresql://localhost:5432/app \
+  -user app -password secret \
+  -locations filesystem:./sql
+
+rian info       # show applied vs. pending migrations
+rian validate   # check applied checksums against the files
+rian repair     # clear failed entries from the history table</code></pre>
+
+  <p>
+    Configuration is read from <code>flyway.conf</code> files, <code>FLYWAY_*</code>
+    environment variables, and command-line flags, in that order of precedence
+    (flags win). Both Flyway's single-dash <code>-url</code> and the GNU-style
+    <code>--url</code> are accepted, so existing Flyway commands work unchanged.
+  </p>
+
+  <h2>Flyway compatibility</h2>
+  <p>
+    Rian is a drop-in for the open-source Flyway engine: the same
+    schema-history format, the same <code>V&lt;version&gt;__name.sql</code> and
+    <code>R__name.sql</code> files, and the same CRC32 checksums. Flyway can
+    migrate a database and Rian can continue it, or the reverse.
+  </p>
+  <p>
+    One caveat carried over from the database itself: MySQL commits DDL
+    implicitly, so a migration that fails partway cannot be rolled back. Like
+    Flyway, Rian marks it failed and requires <code>rian repair</code> before
+    you retry.
+  </p>
+
+  <h2>The name</h2>
+  <p>
+    Rian is an Irish name, usually read as &ldquo;little king&rdquo; — from the
+    Irish <em>rí</em>, &ldquo;king.&rdquo; It's short, lowercase-friendly, and
+    easy to type a hundred times a day.
+  </p>
+
+  <footer>
+    <p><a href="https://github.com/clarkeandrew/rian">Source on GitHub</a> · MIT licensed.</p>
+    <p>
+      Not affiliated with or endorsed by Redgate or Boxfuse. Flyway is a
+      registered trademark of Boxfuse GmbH; Rian is an independent tool built to
+      be compatible with the open-source Flyway engine.
+    </p>
+  </footer>
+</main>
+</body>
+</html>
