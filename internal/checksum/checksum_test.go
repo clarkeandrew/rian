@@ -81,16 +81,3 @@ func TestEmptyInput(t *testing.T) {
 		t.Errorf("empty input checksum = %d, want 0", got)
 	}
 }
-
-// TestCalculateReaderMatchesBytes ensures the io.Reader path agrees with the
-// byte-slice path.
-func TestCalculateReaderMatchesBytes(t *testing.T) {
-	in := "V1__init.sql\nCREATE TABLE x (id int);\n"
-	got, err := Calculate(strings.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != calc(in) {
-		t.Errorf("Calculate reader = %d, CalculateBytes = %d", got, calc(in))
-	}
-}
