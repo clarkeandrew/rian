@@ -298,12 +298,64 @@ func (e *Engine) Baseline(ctx context.Context) error {
 	return e.Conn.InsertHistory(ctx, e.Cfg.Table, row)
 }
 
-// Repair removes failed migration rows so a corrected migration can be re-run.
-func (e *Engine) Repair(ctx context.Context) (int, error) {
+// RepairResult reports what Repair changed.
+type RepairResult struct {
+	RemovedFailed    int
+	AlignedChecksums int
+}
+
+// Repair fixes the schema history the way Flyway's repair does: it removes
+// failed migration rows (so a corrected migration can be re-run) and realigns
+// the stored checksum of applied versioned migrations with the local files.
+// Repeatable rows are left alone — their checksum change is what triggers
+// re-application.
+func (e *Engine) Repair(ctx context.Context) (RepairResult, error) {
+	var res RepairResult
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
-		return 0, err
+		return res, err
 	}
-	return e.Conn.DeleteFailed(ctx, e.Cfg.Table)
+	removed, err := e.Conn.DeleteFailed(ctx, e.Cfg.Table)
+	if err != nil {
+		return res, err
+	}
+	res.RemovedFailed = removed
+
+	r, err := e.resolve()
+	if err != nil {
+		return res, err
+	}
+	onDisk := map[string]scan.Migration{}
+	for _, m := range r.migrations {
+		if m.Type == scan.Versioned {
+			onDisk[m.Version.Canonical()] = m
+		}
+	}
+	rows, err := e.Conn.ReadHistory(ctx, e.Cfg.Table)
+	if err != nil {
+		return res, err
+	}
+	for _, row := range rows {
+		if !row.Success || row.Type == history.TypeBaseline || row.Version == "" {
+			continue
+		}
+		v, err := scan.ParseVersion(row.Version)
+		if err != nil {
+			continue
+		}
+		m, ok := onDisk[v.Canonical()]
+		if !ok {
+			continue
+		}
+		local := r.checksums[m.Script]
+		if row.Checksum != nil && *row.Checksum == local {
+			continue
+		}
+		if err := e.Conn.UpdateChecksum(ctx, e.Cfg.Table, row.InstalledRank, local); err != nil {
+			return res, err
+		}
+		res.AlignedChecksums++
+	}
+	return res, nil
 }
 
 func typeName(t scan.Type) string {

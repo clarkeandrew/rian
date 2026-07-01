@@ -58,6 +58,15 @@ func (f *fakeConn) InsertHistory(_ context.Context, _ string, row history.Row) e
 	f.rows = append(f.rows, row)
 	return nil
 }
+func (f *fakeConn) UpdateChecksum(_ context.Context, _ string, rank int, ck int32) error {
+	for i := range f.rows {
+		if f.rows[i].InstalledRank == rank {
+			c := ck
+			f.rows[i].Checksum = &c
+		}
+	}
+	return nil
+}
 func (f *fakeConn) DeleteFailed(context.Context, string) (int, error) {
 	var kept []history.Row
 	n := 0
@@ -300,7 +309,7 @@ func TestMigrateNonTransactionalFailureThenRepair(t *testing.T) {
 	if _, err := eng.Migrate(context.Background()); err == nil {
 		t.Fatal("migrate should refuse while a failed row is present")
 	}
-	if n, _ := eng.Repair(context.Background()); n != 1 {
+	if res, _ := eng.Repair(context.Background()); res.RemovedFailed != 1 {
 		t.Fatalf("repair should remove 1 failed row")
 	}
 	// After repair the (now non-failing) migration applies cleanly.
@@ -586,14 +595,52 @@ func TestRepairRemovesFailedRows(t *testing.T) {
 	}}
 	eng := New(conn, testConfig(dir))
 
-	n, err := eng.Repair(context.Background())
+	res, err := eng.Repair(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("repaired %d, want 1", n)
+	if res.RemovedFailed != 1 {
+		t.Errorf("repaired %d, want 1", res.RemovedFailed)
 	}
 	if len(conn.rows) != 1 || !conn.rows[0].Success {
 		t.Errorf("failed row should be gone, rows = %+v", conn.rows)
+	}
+}
+
+func TestRepairRealignsChecksums(t *testing.T) {
+	// V1 was applied and then edited on disk: repair must update the stored
+	// checksum so validate is clean again. Repeatable rows are untouched (their
+	// changed checksum means "re-apply", not "drifted").
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"R__v.sql":  "CREATE OR REPLACE VIEW v AS SELECT 1;",
+	})
+	stale := int32(999)
+	conn := &fakeConn{rows: []history.Row{
+		{InstalledRank: 1, Version: "1", Script: "V1__a.sql", Checksum: &stale, Success: true},
+		{InstalledRank: 2, Version: "", Description: "v", Script: "R__v.sql", Checksum: &stale, Success: true},
+	}}
+	eng := New(conn, testConfig(dir))
+
+	res, err := eng.Repair(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.AlignedChecksums != 1 {
+		t.Fatalf("aligned %d checksums, want 1 (versioned only)", res.AlignedChecksums)
+	}
+	want := checksum.CalculateBytes([]byte("CREATE TABLE a (id int);"))
+	if got := conn.rows[0].Checksum; got == nil || *got != want {
+		t.Errorf("stored checksum = %v, want %d", got, want)
+	}
+	if got := conn.rows[1].Checksum; got == nil || *got != stale {
+		t.Errorf("repeatable checksum must not be realigned, got %v", got)
+	}
+	problems, err := eng.Validate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Errorf("validate should be clean after repair, got %v", problems)
 	}
 }

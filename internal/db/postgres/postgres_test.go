@@ -114,6 +114,14 @@ func TestInsertHistorySQL(t *testing.T) {
 	}
 }
 
+func TestUpdateChecksumSQL(t *testing.T) {
+	sql := Dialect{}.UpdateChecksumSQL("h")
+	// Bind order is the Dialect contract: $1 = checksum, $2 = installed_rank.
+	if sql != `UPDATE "h" SET "checksum" = $1 WHERE "installed_rank" = $2` {
+		t.Errorf("unexpected update: %q", sql)
+	}
+}
+
 func TestSelectHistorySQL(t *testing.T) {
 	sql := Dialect{}.SelectHistorySQL("h")
 	if !strings.Contains(sql, `ORDER BY "installed_rank"`) {

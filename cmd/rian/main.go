@@ -267,7 +267,7 @@ func baselineCmd(f *cliFlags) *cobra.Command {
 func repairCmd(f *cliFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "repair",
-		Short: "Remove failed migration entries from the schema history",
+		Short: "Remove failed history entries and realign checksums",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			eng, cleanup, err := f.open(cmd, ctx)
@@ -275,11 +275,12 @@ func repairCmd(f *cliFlags) *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			n, err := eng.Repair(ctx)
+			res, err := eng.Repair(ctx)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Repair complete. Removed %d failed entr(ies).\n", n)
+			fmt.Fprintf(cmd.OutOrStdout(), "Repair complete: removed %d failed entries, realigned %d checksums.\n",
+				res.RemovedFailed, res.AlignedChecksums)
 			return nil
 		},
 	}

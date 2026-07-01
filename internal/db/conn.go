@@ -38,6 +38,10 @@ type Conn interface {
 	// the number deleted.
 	DeleteFailed(ctx context.Context, table string) (int, error)
 
+	// UpdateChecksum sets the checksum of the row with the given installed_rank
+	// (used by repair to realign edited applied migrations).
+	UpdateChecksum(ctx context.Context, table string, installedRank int, checksum int32) error
+
 	// Close releases the connection.
 	Close(ctx context.Context) error
 }

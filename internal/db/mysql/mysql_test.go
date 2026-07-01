@@ -85,6 +85,14 @@ func TestSelectHistorySQL(t *testing.T) {
 	}
 }
 
+func TestUpdateChecksumSQL(t *testing.T) {
+	sql := Dialect{}.UpdateChecksumSQL("h")
+	// Bind order is the Dialect contract: checksum first, installed_rank second.
+	if sql != "UPDATE `h` SET `checksum` = ? WHERE `installed_rank` = ?" {
+		t.Errorf("unexpected update: %q", sql)
+	}
+}
+
 // TestDSN round-trips the produced DSN back through the driver's ParseDSN and
 // asserts the decoded fields, which is more robust than string equality and
 // guarantees the output is actually parseable by go-sql-driver.

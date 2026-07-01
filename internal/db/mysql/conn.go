@@ -162,6 +162,13 @@ func (c *Conn) InsertHistory(ctx context.Context, table string, row history.Row)
 	return nil
 }
 
+func (c *Conn) UpdateChecksum(ctx context.Context, table string, installedRank int, checksum int32) error {
+	if _, err := c.exec.ExecContext(ctx, c.dialect.UpdateChecksumSQL(table), checksum, installedRank); err != nil {
+		return fmt.Errorf("update checksum: %w", err)
+	}
+	return nil
+}
+
 func (c *Conn) DeleteFailed(ctx context.Context, table string) (int, error) {
 	res, err := c.exec.ExecContext(ctx,
 		"DELETE FROM "+c.dialect.QuoteIdentifier(table)+" WHERE `success` = false")
