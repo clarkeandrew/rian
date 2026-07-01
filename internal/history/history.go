@@ -15,6 +15,9 @@ import (
 // DefaultTable is Flyway's default schema-history table name.
 const DefaultTable = "flyway_schema_history"
 
+// TypeBaseline is the history `type` Flyway records for a baseline row.
+const TypeBaseline = "BASELINE"
+
 // Row is one schema-history record. Column order/types match Flyway:
 // installed_rank, version, description, type, script, checksum, installed_by,
 // installed_on, execution_time, success. Version is empty for repeatable
@@ -45,18 +48,24 @@ func NextRank(rows []Row) int {
 
 // Pending returns the migrations that still need to be applied, preserving the
 // input order (scan already sorts versioned-then-repeatable). A versioned
-// migration is pending when no successful history row records its version. A
-// repeatable migration is pending when it has never been applied successfully
-// or its checksum has changed since the last successful application.
+// migration is pending when no successful history row records its version;
+// versions at or below a recorded baseline count as applied (Flyway's baseline
+// semantics). A repeatable migration is pending when it has never been applied
+// successfully or its checksum has changed since the last successful
+// application.
 //
 // checksums maps a migration's Script to its computed checksum and is consulted
 // only for repeatable migrations.
 func Pending(migs []scan.Migration, checksums map[string]int32, rows []Row) []scan.Migration {
+	baseline := BaselineVersion(rows)
 	var pending []scan.Migration
 	for _, m := range migs {
 		switch m.Type {
 		case scan.Versioned:
-			if !versionApplied(m.Version, rows) {
+			if baseline != nil && m.Version.Compare(baseline) <= 0 {
+				continue
+			}
+			if !VersionApplied(m.Version, rows) {
 				pending = append(pending, m)
 			}
 		case scan.Repeatable:
@@ -110,6 +119,10 @@ func Validate(migs []scan.Migration, checksums map[string]int32, rows []Row) []P
 			problems = append(problems, Problem{FailedMigration, r.Script, "run repair to remove the failed entry"})
 			continue
 		}
+		if r.Type == TypeBaseline {
+			// The baseline marker has no corresponding file on disk.
+			continue
+		}
 		if r.Version == "" {
 			// Repeatable: resolved by description. A successful row that no longer
 			// maps to any local repeatable is unresolved (Flyway raises this). A
@@ -144,13 +157,54 @@ func Validate(migs []scan.Migration, checksums map[string]int32, rows []Row) []P
 	return problems
 }
 
-func versionApplied(v *scan.Version, rows []Row) bool {
+// VersionApplied reports whether some successful history row records this
+// version (comparing canonically, so "1" matches "1.0").
+func VersionApplied(v *scan.Version, rows []Row) bool {
 	for _, r := range rows {
 		if r.Success && r.Version != "" && sameVersion(v, r.Version) {
 			return true
 		}
 	}
 	return false
+}
+
+// BaselineVersion returns the version of the latest successful baseline row, or
+// nil when the history has none. Versioned migrations at or below this version
+// are treated as already applied.
+func BaselineVersion(rows []Row) *scan.Version {
+	var base *scan.Version
+	for _, r := range rows {
+		if !r.Success || r.Type != TypeBaseline || r.Version == "" {
+			continue
+		}
+		v, err := scan.ParseVersion(r.Version)
+		if err != nil {
+			continue
+		}
+		if base == nil || v.Compare(base) > 0 {
+			base = v
+		}
+	}
+	return base
+}
+
+// MaxAppliedVersion returns the highest version among successful versioned rows
+// (a baseline row counts), or nil when there are none.
+func MaxAppliedVersion(rows []Row) *scan.Version {
+	var max *scan.Version
+	for _, r := range rows {
+		if !r.Success || r.Version == "" {
+			continue
+		}
+		v, err := scan.ParseVersion(r.Version)
+		if err != nil {
+			continue
+		}
+		if max == nil || v.Compare(max) > 0 {
+			max = v
+		}
+	}
+	return max
 }
 
 // repeatableNeedsApply reports whether a repeatable migration (matched by

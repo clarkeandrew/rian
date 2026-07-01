@@ -69,6 +69,12 @@ end-to-end suite.
 - **Schema-history format is fixed by Flyway.** Column names, order, types, and
   `installed_rank`/`success` semantics must match so Flyway and Rian can read
   each other's history.
+- **Migrate is validate-first and in-order (Flyway defaults).** `migrate` fails
+  on checksum drift, unresolved applied migrations, or failed rows before
+  applying anything (`validateOnMigrate`), and refuses a pending version below
+  the latest applied one (`outOfOrder=false`). Versioned migrations at or below
+  a recorded baseline row are treated as already applied. Known divergence:
+  `validate` does not fail on pending migrations (Flyway's default does).
 - **Transaction strategy is dialect-driven.** Postgres runs each migration in a
   transaction and rolls back on failure. MySQL implicitly commits DDL and
   cannot roll back; on failure Rian marks the migration failed and requires

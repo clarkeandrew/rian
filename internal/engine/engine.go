@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/clarkeandrew/rian/internal/checksum"
 	"github.com/clarkeandrew/rian/internal/config"
@@ -74,7 +75,9 @@ type MigrateResult struct {
 }
 
 // Migrate applies all pending migrations in order. It stops at the first
-// failure (like Flyway).
+// failure (like Flyway). Matching Flyway's defaults, it validates the recorded
+// history first (validateOnMigrate) and refuses out-of-order migrations — a
+// pending version below the latest applied one (outOfOrder=false).
 func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return MigrateResult{}, err
@@ -87,8 +90,20 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	if err != nil {
 		return MigrateResult{}, err
 	}
+	if problems := history.Validate(r.migrations, r.checksums, rows); len(problems) > 0 {
+		return MigrateResult{}, fmt.Errorf("validation failed before migrate: %s", joinProblems(problems))
+	}
 
 	pending := history.Pending(r.migrations, r.checksums, rows)
+	if maxV := history.MaxAppliedVersion(rows); maxV != nil {
+		for _, m := range pending {
+			if m.Type == scan.Versioned && m.Version.Compare(maxV) < 0 {
+				return MigrateResult{}, fmt.Errorf(
+					"migration %s (version %s) is below the already-applied version %s; out-of-order migrations are not supported",
+					m.Script, m.Version, maxV)
+			}
+		}
+	}
 	rank := history.NextRank(rows)
 
 	var result MigrateResult
@@ -159,6 +174,7 @@ func (e *Engine) Info(ctx context.Context) ([]InfoEntry, error) {
 	for _, m := range history.Pending(r.migrations, r.checksums, rows) {
 		pending[m.Script] = true
 	}
+	baseline := history.BaselineVersion(rows)
 
 	entries := make([]InfoEntry, 0, len(r.migrations))
 	for _, m := range r.migrations {
@@ -167,8 +183,12 @@ func (e *Engine) Info(ctx context.Context) ([]InfoEntry, error) {
 			version = m.Version.String()
 		}
 		status := "Applied"
-		if pending[m.Script] {
+		switch {
+		case pending[m.Script]:
 			status = "Pending"
+		case m.Type == scan.Versioned && baseline != nil && m.Version.Compare(baseline) <= 0 &&
+			!history.VersionApplied(m.Version, rows):
+			status = "Below Baseline"
 		}
 		entries = append(entries, InfoEntry{
 			Type:        string(typeName(m.Type)),
@@ -201,6 +221,9 @@ func (e *Engine) Validate(ctx context.Context) ([]history.Problem, error) {
 // all earlier migrations as already applied. It is a no-op error if history
 // already contains rows.
 func (e *Engine) Baseline(ctx context.Context) error {
+	if _, err := scan.ParseVersion(e.Cfg.BaselineVersion); err != nil {
+		return fmt.Errorf("baseline version: %w", err)
+	}
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return err
 	}
@@ -215,7 +238,7 @@ func (e *Engine) Baseline(ctx context.Context) error {
 		InstalledRank: 1,
 		Version:       e.Cfg.BaselineVersion,
 		Description:   "<< Flyway Baseline >>",
-		Type:          "BASELINE",
+		Type:          history.TypeBaseline,
 		Script:        "<< Flyway Baseline >>",
 		InstalledBy:   e.Cfg.User,
 		Success:       true,
@@ -236,4 +259,12 @@ func typeName(t scan.Type) string {
 		return "Repeatable"
 	}
 	return "Versioned"
+}
+
+func joinProblems(ps []history.Problem) string {
+	strs := make([]string, len(ps))
+	for i, p := range ps {
+		strs[i] = p.String()
+	}
+	return strings.Join(strs, "; ")
 }

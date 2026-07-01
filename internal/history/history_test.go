@@ -63,6 +63,36 @@ func TestPendingVersionedMatchesAcrossVersionFormatting(t *testing.T) {
 	}
 }
 
+func TestPendingSkipsBaselineAndBelow(t *testing.T) {
+	migs := []scan.Migration{
+		versioned(t, "1", "init", "V1__init.sql"),
+		versioned(t, "2", "next", "V2__next.sql"),
+		versioned(t, "3", "third", "V3__third.sql"),
+	}
+	rows := []Row{{InstalledRank: 1, Version: "2", Type: TypeBaseline, Script: "<< Flyway Baseline >>", Success: true}}
+	got := Pending(migs, nil, rows)
+	if len(got) != 1 || got[0].Script != "V3__third.sql" {
+		t.Errorf("pending = %v, want only V3 (V1/V2 are at or below the baseline)", scripts(got))
+	}
+}
+
+func TestBaselineVersionAndMaxApplied(t *testing.T) {
+	rows := []Row{
+		{InstalledRank: 1, Version: "2", Type: TypeBaseline, Success: true},
+		{InstalledRank: 2, Version: "3", Type: "SQL", Success: true},
+		{InstalledRank: 3, Version: "9", Type: "SQL", Success: false}, // failed: ignored
+	}
+	if b := BaselineVersion(rows); b == nil || b.String() != "2" {
+		t.Errorf("BaselineVersion = %v, want 2", b)
+	}
+	if m := MaxAppliedVersion(rows); m == nil || m.String() != "3" {
+		t.Errorf("MaxAppliedVersion = %v, want 3", m)
+	}
+	if BaselineVersion(nil) != nil || MaxAppliedVersion(nil) != nil {
+		t.Error("empty history should have no baseline or max applied version")
+	}
+}
+
 func TestPendingRepeatable(t *testing.T) {
 	migs := []scan.Migration{repeatable("refresh views", "R__refresh_views.sql")}
 	checksums := map[string]int32{"R__refresh_views.sql": 100}
@@ -141,6 +171,15 @@ func TestValidateRepeatableUnresolved(t *testing.T) {
 	problems := Validate(local, checksums, rows)
 	if len(problems) != 1 || problems[0].Kind != MissingMigration || problems[0].Script != "R__deleted_view.sql" {
 		t.Fatalf("expected one MissingMigration for the deleted repeatable, got %v", problems)
+	}
+}
+
+func TestValidateSkipsBaselineRow(t *testing.T) {
+	// The baseline marker has a version but no file on disk; it must not be
+	// reported as a missing migration.
+	rows := []Row{{InstalledRank: 1, Version: "1", Type: TypeBaseline, Script: "<< Flyway Baseline >>", Success: true}}
+	if problems := Validate(nil, nil, rows); len(problems) != 0 {
+		t.Fatalf("baseline row should be skipped by validate, got %v", problems)
 	}
 }
 
