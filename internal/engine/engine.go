@@ -84,6 +84,10 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	if err != nil {
 		return MigrateResult{}, err
 	}
+	if err := e.Conn.Lock(ctx, e.Cfg.Table); err != nil {
+		return MigrateResult{}, err
+	}
+	defer e.Conn.Unlock(ctx, e.Cfg.Table)
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return MigrateResult{}, err
 	}
@@ -276,6 +280,10 @@ func (e *Engine) Baseline(ctx context.Context) error {
 	if _, err := scan.ParseVersion(e.Cfg.BaselineVersion); err != nil {
 		return fmt.Errorf("baseline version: %w", err)
 	}
+	if err := e.Conn.Lock(ctx, e.Cfg.Table); err != nil {
+		return err
+	}
+	defer e.Conn.Unlock(ctx, e.Cfg.Table)
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return err
 	}
@@ -311,6 +319,10 @@ type RepairResult struct {
 // re-application.
 func (e *Engine) Repair(ctx context.Context) (RepairResult, error) {
 	var res RepairResult
+	if err := e.Conn.Lock(ctx, e.Cfg.Table); err != nil {
+		return res, err
+	}
+	defer e.Conn.Unlock(ctx, e.Cfg.Table)
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return res, err
 	}

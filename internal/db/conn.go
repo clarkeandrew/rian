@@ -20,6 +20,13 @@ import (
 type Conn interface {
 	Dialect() Dialect
 
+	// Lock acquires the migration lock for the given history table, blocking
+	// until it is available, so concurrent runs (e.g. app replicas starting
+	// together) cannot race. Unlock releases it; the lock is also released when
+	// the connection closes. Postgres uses an advisory lock, MySQL GET_LOCK.
+	Lock(ctx context.Context, table string) error
+	Unlock(ctx context.Context, table string) error
+
 	// EnsureHistory creates the schema-history table if it does not exist.
 	EnsureHistory(ctx context.Context, table string) error
 

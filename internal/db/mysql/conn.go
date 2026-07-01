@@ -25,6 +25,10 @@ type Conn struct {
 	db      *sql.DB
 	exec    executor // defaults to db; overridable in tests
 	dialect Dialect
+
+	// lockConn pins the migration lock to one pooled connection: GET_LOCK is
+	// per-connection, so acquire and release must happen on the same one.
+	lockConn *sql.Conn
 }
 
 var _ db.Conn = (*Conn)(nil)
@@ -95,6 +99,52 @@ func Connect(ctx context.Context, jdbcURL, user, password string) (*Conn, error)
 func (c *Conn) Dialect() db.Dialect { return c.dialect }
 
 func (c *Conn) Close(context.Context) error { return c.db.Close() }
+
+// lockName derives the GET_LOCK name for a history table. Lock names are
+// server-wide and capped at 64 characters.
+func lockName(table string) string {
+	name := "rian:" + table
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	return name
+}
+
+func (c *Conn) Lock(ctx context.Context, table string) error {
+	if c.lockConn != nil {
+		return fmt.Errorf("migration lock already held")
+	}
+	lc, err := c.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	var got sql.NullInt64
+	// -1 = wait indefinitely; the lock also drops if the connection dies.
+	if err := lc.QueryRowContext(ctx, "SELECT GET_LOCK(?, -1)", lockName(table)).Scan(&got); err != nil {
+		_ = lc.Close()
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	if !got.Valid || got.Int64 != 1 {
+		_ = lc.Close()
+		return fmt.Errorf("acquire migration lock: GET_LOCK returned %v", got)
+	}
+	c.lockConn = lc
+	return nil
+}
+
+func (c *Conn) Unlock(ctx context.Context, table string) error {
+	if c.lockConn == nil {
+		return nil
+	}
+	var released sql.NullInt64
+	err := c.lockConn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", lockName(table)).Scan(&released)
+	closeErr := c.lockConn.Close()
+	c.lockConn = nil
+	if err != nil {
+		return fmt.Errorf("release migration lock: %w", err)
+	}
+	return closeErr
+}
 
 func (c *Conn) EnsureHistory(ctx context.Context, table string) error {
 	if _, err := c.db.ExecContext(ctx, c.dialect.CreateHistoryTableSQL(table)); err != nil {

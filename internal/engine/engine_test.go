@@ -30,9 +30,12 @@ type fakeConn struct {
 
 	applied    []string
 	statements [][]string // statements passed to each successful ApplyMigration
+	locks      int        // Lock calls minus Unlock calls (0 = balanced)
 }
 
 func (f *fakeConn) Dialect() db.Dialect                         { return nil }
+func (f *fakeConn) Lock(context.Context, string) error          { f.locks++; return nil }
+func (f *fakeConn) Unlock(context.Context, string) error        { f.locks--; return nil }
 func (f *fakeConn) EnsureHistory(context.Context, string) error { return f.ensureErr }
 func (f *fakeConn) ReadHistory(context.Context, string) ([]history.Row, error) {
 	if f.readErr != nil {
@@ -130,6 +133,9 @@ func TestMigrateAppliesPendingInOrder(t *testing.T) {
 	if len(res2.Applied) != 0 {
 		t.Errorf("second migrate applied %v, want none", res2.Applied)
 	}
+	if conn.locks != 0 {
+		t.Errorf("migration lock not balanced: %d net Lock calls", conn.locks)
+	}
 }
 
 func TestMigrateStopsAtFirstFailure(t *testing.T) {
@@ -153,6 +159,10 @@ func TestMigrateStopsAtFirstFailure(t *testing.T) {
 		if s == "V3__c.sql" {
 			t.Error("V3 should not run after V2 failed")
 		}
+	}
+	// The migration lock must be released even on failure.
+	if conn.locks != 0 {
+		t.Errorf("migration lock not balanced after failure: %d net Lock calls", conn.locks)
 	}
 }
 
