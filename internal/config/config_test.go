@@ -129,6 +129,23 @@ func TestOutOfOrderKey(t *testing.T) {
 	}
 }
 
+func TestValidateOnMigrateKey(t *testing.T) {
+	cfg, err := Load(Flags{ConfigFiles: []string{writeConf(t, "")}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ValidateOnMigrate {
+		t.Error("validateOnMigrate should default to true")
+	}
+	cfg, err = Load(Flags{ConfigFiles: []string{writeConf(t, "flyway.validateOnMigrate=false\n")}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ValidateOnMigrate {
+		t.Error("flyway.validateOnMigrate=false should disable it")
+	}
+}
+
 func TestSchemaKeysWarnUnsupported(t *testing.T) {
 	// schemas/defaultSchema are recognized (an existing flyway.conf still loads)
 	// but unsupported, so each must produce a warning rather than a silent no-op.

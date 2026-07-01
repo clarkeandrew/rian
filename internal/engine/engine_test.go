@@ -371,6 +371,18 @@ func TestMigrateValidatesFirst(t *testing.T) {
 	if len(conn.applied) != 0 {
 		t.Errorf("nothing should be applied on a drifted history, applied %v", conn.applied)
 	}
+
+	// With validateOnMigrate disabled, the drifted history is tolerated and the
+	// pending migration applies.
+	cfg := testConfig(dir)
+	cfg.ValidateOnMigrate = false
+	res, err := New(conn, cfg).Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != 1 || res.Applied[0].Script != "V2__b.sql" {
+		t.Fatalf("applied = %v, want V2", res.Applied)
+	}
 }
 
 func TestMigrateRefusesOutOfOrder(t *testing.T) {

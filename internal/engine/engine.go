@@ -95,8 +95,10 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	if err != nil {
 		return MigrateResult{}, err
 	}
-	if problems := history.Validate(r.migrations, r.checksums, rows); len(problems) > 0 {
-		return MigrateResult{}, fmt.Errorf("validation failed before migrate: %s", joinProblems(problems))
+	if e.Cfg.ValidateOnMigrate {
+		if problems := history.Validate(r.migrations, r.checksums, rows); len(problems) > 0 {
+			return MigrateResult{}, fmt.Errorf("validation failed before migrate: %s", joinProblems(problems))
+		}
 	}
 
 	pending := aboveTargetDropped(history.Pending(r.migrations, r.checksums, rows), target)
