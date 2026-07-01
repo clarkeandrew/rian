@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/clarkeandrew/rian/internal/checksum"
@@ -293,14 +294,104 @@ func TestMigrateNonTransactionalFailureThenRepair(t *testing.T) {
 	if len(problems) != 1 || problems[0].Kind != history.FailedMigration {
 		t.Fatalf("validate should report the failed migration, got %v", problems)
 	}
+	// While the failed row is present, migrate refuses (validate-first) — repair
+	// is genuinely required.
+	conn.failScript = ""
+	if _, err := eng.Migrate(context.Background()); err == nil {
+		t.Fatal("migrate should refuse while a failed row is present")
+	}
 	if n, _ := eng.Repair(context.Background()); n != 1 {
 		t.Fatalf("repair should remove 1 failed row")
 	}
 	// After repair the (now non-failing) migration applies cleanly.
-	conn.failScript = ""
 	res, err := eng.Migrate(context.Background())
 	if err != nil || len(res.Applied) != 1 {
 		t.Fatalf("re-migrate after repair: applied=%v err=%v", res.Applied, err)
+	}
+}
+
+func TestMigrateValidatesFirst(t *testing.T) {
+	// A drifted applied migration (checksum mismatch) must block migrate before
+	// anything is applied — Flyway's validateOnMigrate default.
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"V2__b.sql": "CREATE TABLE b (id int);",
+	})
+	wrong := int32(12345)
+	conn := &fakeConn{rows: []history.Row{
+		{InstalledRank: 1, Version: "1", Script: "V1__a.sql", Checksum: &wrong, Success: true},
+	}}
+	_, err := New(conn, testConfig(dir)).Migrate(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "validation failed") {
+		t.Fatalf("expected validation failure before migrate, got %v", err)
+	}
+	if len(conn.applied) != 0 {
+		t.Errorf("nothing should be applied on a drifted history, applied %v", conn.applied)
+	}
+}
+
+func TestMigrateRefusesOutOfOrder(t *testing.T) {
+	// V2 is applied; a newly-added V1 below it must be refused, matching
+	// Flyway's outOfOrder=false default.
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"V2__b.sql": "CREATE TABLE b (id int);",
+	})
+	ck := checksum.CalculateBytes([]byte("CREATE TABLE b (id int);"))
+	conn := &fakeConn{rows: []history.Row{
+		{InstalledRank: 1, Version: "2", Script: "V2__b.sql", Checksum: &ck, Success: true},
+	}}
+	_, err := New(conn, testConfig(dir)).Migrate(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "out-of-order") {
+		t.Fatalf("expected out-of-order refusal, got %v", err)
+	}
+	if len(conn.applied) != 0 {
+		t.Errorf("nothing should be applied, applied %v", conn.applied)
+	}
+}
+
+func TestBaselineThenMigrateSkipsBelowBaseline(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"V2__b.sql": "CREATE TABLE b (id int);",
+		"V3__c.sql": "CREATE TABLE c (id int);",
+	})
+	conn := &fakeConn{}
+	cfg := testConfig(dir)
+	cfg.BaselineVersion = "2"
+	eng := New(conn, cfg)
+
+	if err := eng.Baseline(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res, err := eng.Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != 1 || res.Applied[0].Script != "V3__c.sql" {
+		t.Fatalf("applied = %v, want only V3 (V1/V2 are at or below the baseline)", res.Applied)
+	}
+	entries, err := eng.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStatus := map[string]string{
+		"V1__a.sql": "Below Baseline",
+		"V2__b.sql": "Applied", // at the baseline version: recorded by the baseline row
+		"V3__c.sql": "Applied",
+	}
+	for _, e := range entries {
+		if e.Status != wantStatus[e.Script] {
+			t.Errorf("info %s status = %q, want %q", e.Script, e.Status, wantStatus[e.Script])
+		}
+	}
+}
+
+func TestBaselineRejectsInvalidVersion(t *testing.T) {
+	cfg := testConfig(migrationsDir(t, nil))
+	cfg.BaselineVersion = "not-a-version"
+	if err := New(&fakeConn{}, cfg).Baseline(context.Background()); err == nil {
+		t.Fatal("expected error for invalid baseline version")
 	}
 }
 

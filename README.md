@@ -108,6 +108,14 @@ Rian aims to be a drop-in replacement for the **open-source Flyway engine**
 features — undo migrations, Java/script migrations, callbacks — are intentionally
 out of scope.
 
+Behavior matches Flyway's defaults: `migrate` validates the recorded history
+first (`validateOnMigrate`) and refuses out-of-order migrations
+(`outOfOrder=false`); a baseline marks every version at or below it as applied.
+Neither behavior is configurable yet. Known divergences: `validate` does not
+fail on pending migrations (Flyway's default does — use `rian info` to see
+pending state), and `flyway.schemas`/`flyway.defaultSchema` are unsupported
+(Rian warns and uses the connection's default schema).
+
 > **Note on MySQL:** MySQL implicitly commits DDL statements, so a migration
 > that fails partway cannot be rolled back. Like Flyway, Rian marks the failed
 > migration in the history table and requires `repair`; manual cleanup of any

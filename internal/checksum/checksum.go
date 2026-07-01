@@ -33,20 +33,10 @@ package checksum
 import (
 	"bytes"
 	"hash/crc32"
-	"io"
 )
 
 // utf8BOM is the UTF-8 byte-order mark stripped from the start of the input.
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
-
-// Calculate reads all of r and returns its Flyway-compatible checksum.
-func Calculate(r io.Reader) (int32, error) {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return 0, err
-	}
-	return CalculateBytes(data), nil
-}
 
 // CalculateBytes returns the Flyway-compatible checksum of the given content.
 func CalculateBytes(data []byte) int32 {

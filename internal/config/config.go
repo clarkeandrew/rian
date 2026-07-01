@@ -21,10 +21,8 @@ type Config struct {
 	User     string
 	Password string
 
-	Locations     []string
-	Schemas       []string
-	DefaultSchema string
-	Table         string
+	Locations []string
+	Table     string
 
 	SQLMigrationPrefix           string
 	RepeatableSQLMigrationPrefix string
@@ -111,10 +109,11 @@ func (cfg *Config) set(subkey, value string) bool {
 		cfg.Password = value
 	case "locations":
 		cfg.Locations = splitList(value)
-	case "schemas":
-		cfg.Schemas = splitList(value)
-	case "defaultSchema":
-		cfg.DefaultSchema = value
+	case "schemas", "defaultSchema":
+		// Recognized so existing Flyway configs load, but Rian always uses the
+		// connection's default schema — silently honoring these would lie.
+		cfg.Warnings = append(cfg.Warnings,
+			fmt.Sprintf("flyway.%s is not supported: rian uses the connection's default schema", subkey))
 	case "table":
 		cfg.Table = value
 	case "baselineVersion":
