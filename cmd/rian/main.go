@@ -55,6 +55,7 @@ type cliFlags struct {
 	password     string
 	table        string
 	target       string
+	outOfOrder   bool
 	locations    []string
 	configFiles  []string
 	placeholders map[string]string
@@ -76,6 +77,7 @@ func rootCmd() *cobra.Command {
 	pf.StringVar(&f.password, "password", "", "database password")
 	pf.StringVar(&f.table, "table", "", "schema history table name")
 	pf.StringVar(&f.target, "target", "", "highest version to apply ('latest' or empty = no limit)")
+	pf.BoolVar(&f.outOfOrder, "outOfOrder", false, "allow applying versions below the latest applied one")
 	pf.StringSliceVar(&f.locations, "locations", nil, "migration locations (comma-separated)")
 	pf.StringSliceVar(&f.configFiles, "configFiles", nil, "flyway.conf files to load")
 	pf.StringToStringVar(&f.placeholders, "placeholders", nil, "placeholder values (key=value)")
@@ -111,6 +113,9 @@ func (f *cliFlags) resolveConfig(cmd *cobra.Command) (config.Config, error) {
 	}
 	if cmd.Flags().Changed("target") {
 		flags.Target = &f.target
+	}
+	if cmd.Flags().Changed("outOfOrder") {
+		flags.OutOfOrder = &f.outOfOrder
 	}
 	if cmd.Flags().Changed("locations") {
 		flags.Locations = &f.locations

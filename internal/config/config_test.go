@@ -110,6 +110,25 @@ func TestTargetKey(t *testing.T) {
 	}
 }
 
+func TestOutOfOrderKey(t *testing.T) {
+	conf := writeConf(t, "flyway.outOfOrder=true\n")
+	cfg, err := Load(Flags{ConfigFiles: []string{conf}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OutOfOrder {
+		t.Error("flyway.outOfOrder=true should enable OutOfOrder")
+	}
+	off := false
+	cfg, err = Load(Flags{ConfigFiles: []string{conf}, OutOfOrder: &off}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OutOfOrder {
+		t.Error("flag should override file to false")
+	}
+}
+
 func TestSchemaKeysWarnUnsupported(t *testing.T) {
 	// schemas/defaultSchema are recognized (an existing flyway.conf still loads)
 	// but unsupported, so each must produce a warning rather than a silent no-op.

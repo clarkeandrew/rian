@@ -385,11 +385,22 @@ func TestMigrateRefusesOutOfOrder(t *testing.T) {
 		{InstalledRank: 1, Version: "2", Script: "V2__b.sql", Checksum: &ck, Success: true},
 	}}
 	_, err := New(conn, testConfig(dir)).Migrate(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "out-of-order") {
+	if err == nil || !strings.Contains(err.Error(), "outOfOrder") {
 		t.Fatalf("expected out-of-order refusal, got %v", err)
 	}
 	if len(conn.applied) != 0 {
 		t.Errorf("nothing should be applied, applied %v", conn.applied)
+	}
+
+	// With outOfOrder enabled, the older migration applies.
+	cfg := testConfig(dir)
+	cfg.OutOfOrder = true
+	res, err := New(conn, cfg).Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != 1 || res.Applied[0].Script != "V1__a.sql" {
+		t.Fatalf("applied = %v, want V1 (out of order)", res.Applied)
 	}
 }
 

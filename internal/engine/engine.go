@@ -78,7 +78,7 @@ type MigrateResult struct {
 // version (if any). It stops at the first failure (like Flyway). Matching
 // Flyway's defaults, it validates the recorded history first (validateOnMigrate)
 // and refuses out-of-order migrations — a pending version below the latest
-// applied one (outOfOrder=false).
+// applied one — unless outOfOrder is enabled.
 func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	target, err := e.targetVersion()
 	if err != nil {
@@ -100,11 +100,11 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	}
 
 	pending := aboveTargetDropped(history.Pending(r.migrations, r.checksums, rows), target)
-	if maxV := history.MaxAppliedVersion(rows); maxV != nil {
+	if maxV := history.MaxAppliedVersion(rows); maxV != nil && !e.Cfg.OutOfOrder {
 		for _, m := range pending {
 			if m.Type == scan.Versioned && m.Version.Compare(maxV) < 0 {
 				return MigrateResult{}, fmt.Errorf(
-					"migration %s (version %s) is below the already-applied version %s; out-of-order migrations are not supported",
+					"migration %s (version %s) is below the already-applied version %s; set outOfOrder=true to allow it",
 					m.Script, m.Version, maxV)
 			}
 		}

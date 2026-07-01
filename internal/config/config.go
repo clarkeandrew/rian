@@ -36,6 +36,7 @@ type Config struct {
 
 	BaselineVersion string
 	Target          string // highest version migrate applies; "" or "latest" = no limit
+	OutOfOrder      bool   // allow applying a pending version below the latest applied one
 
 	// Warnings collects non-fatal issues (e.g. unsupported config keys) for the
 	// caller to surface to the user.
@@ -69,6 +70,7 @@ type Flags struct {
 	Locations    *[]string
 	Table        *string
 	Target       *string
+	OutOfOrder   *bool
 	Placeholders map[string]string
 }
 
@@ -122,6 +124,8 @@ func (cfg *Config) set(subkey, value string) bool {
 		cfg.BaselineVersion = value
 	case "target":
 		cfg.Target = value
+	case "outOfOrder":
+		cfg.OutOfOrder = parseBool(value, cfg.OutOfOrder)
 	case "sqlMigrationPrefix":
 		cfg.SQLMigrationPrefix = value
 	case "repeatableSqlMigrationPrefix":
@@ -216,6 +220,9 @@ func applyFlags(cfg *Config, f Flags) {
 	}
 	if f.Target != nil {
 		cfg.Target = *f.Target
+	}
+	if f.OutOfOrder != nil {
+		cfg.OutOfOrder = *f.OutOfOrder
 	}
 	for k, v := range f.Placeholders {
 		cfg.Placeholders[k] = v
