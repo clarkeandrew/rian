@@ -129,6 +129,16 @@ func TestOutOfOrderKey(t *testing.T) {
 	}
 }
 
+func TestInstalledByKey(t *testing.T) {
+	cfg, err := Load(Flags{ConfigFiles: []string{writeConf(t, "flyway.installedBy=deploy-bot\n")}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.InstalledBy != "deploy-bot" {
+		t.Errorf("installedBy = %q, want deploy-bot", cfg.InstalledBy)
+	}
+}
+
 func TestValidateOnMigrateKey(t *testing.T) {
 	cfg, err := Load(Flags{ConfigFiles: []string{writeConf(t, "")}}, nil)
 	if err != nil {

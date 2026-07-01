@@ -453,6 +453,19 @@ func TestBaselineThenMigrateSkipsBelowBaseline(t *testing.T) {
 	}
 }
 
+func TestInstalledByOverride(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{"V1__a.sql": "CREATE TABLE a (id int);"})
+	conn := &fakeConn{}
+	cfg := testConfig(dir) // User = "tester"
+	cfg.InstalledBy = "deploy-bot"
+	if _, err := New(conn, cfg).Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.rows[0].InstalledBy; got != "deploy-bot" {
+		t.Errorf("installed_by = %q, want configured override deploy-bot", got)
+	}
+}
+
 func TestBaselineRejectsInvalidVersion(t *testing.T) {
 	cfg := testConfig(migrationsDir(t, nil))
 	cfg.BaselineVersion = "not-a-version"

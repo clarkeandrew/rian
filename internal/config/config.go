@@ -38,6 +38,7 @@ type Config struct {
 	Target            string // highest version migrate applies; "" or "latest" = no limit
 	OutOfOrder        bool   // allow applying a pending version below the latest applied one
 	ValidateOnMigrate bool   // validate the recorded history before migrating
+	InstalledBy       string // installed_by history value; "" = the database user
 
 	// Warnings collects non-fatal issues (e.g. unsupported config keys) for the
 	// caller to surface to the user.
@@ -131,6 +132,8 @@ func (cfg *Config) set(subkey, value string) bool {
 		cfg.OutOfOrder = parseBool(value, cfg.OutOfOrder)
 	case "validateOnMigrate":
 		cfg.ValidateOnMigrate = parseBool(value, cfg.ValidateOnMigrate)
+	case "installedBy":
+		cfg.InstalledBy = value
 	case "sqlMigrationPrefix":
 		cfg.SQLMigrationPrefix = value
 	case "repeatableSqlMigrationPrefix":

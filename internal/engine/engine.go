@@ -129,6 +129,15 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	return result, nil
 }
 
+// installedBy returns the value recorded in installed_by: the configured
+// override, or the connection user.
+func (e *Engine) installedBy() string {
+	if e.Cfg.InstalledBy != "" {
+		return e.Cfg.InstalledBy
+	}
+	return e.Cfg.User
+}
+
 // targetVersion parses the configured target; empty or "latest" means no limit.
 func (e *Engine) targetVersion() (*scan.Version, error) {
 	t := e.Cfg.Target
@@ -176,7 +185,7 @@ func (e *Engine) historyRow(m scan.Migration, checksum int32, rank int) history.
 		Type:          "SQL",
 		Script:        m.Script,
 		Checksum:      &checksum,
-		InstalledBy:   e.Cfg.User,
+		InstalledBy:   e.installedBy(),
 	}
 	if m.Type == scan.Versioned {
 		row.Version = m.Version.String()
@@ -283,7 +292,7 @@ func (e *Engine) Baseline(ctx context.Context) error {
 		Description:   "<< Flyway Baseline >>",
 		Type:          history.TypeBaseline,
 		Script:        "<< Flyway Baseline >>",
-		InstalledBy:   e.Cfg.User,
+		InstalledBy:   e.installedBy(),
 		Success:       true,
 	}
 	return e.Conn.InsertHistory(ctx, e.Cfg.Table, row)
