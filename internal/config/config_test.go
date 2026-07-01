@@ -91,6 +91,25 @@ func anyContains(ss []string, sub string) bool {
 	return false
 }
 
+func TestTargetKey(t *testing.T) {
+	conf := writeConf(t, "flyway.target=5\n")
+	cfg, err := Load(Flags{ConfigFiles: []string{conf}}, []string{"FLYWAY_TARGET=7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Target != "7" {
+		t.Errorf("target = %q, want env override 7", cfg.Target)
+	}
+	tgt := "9"
+	cfg, err = Load(Flags{ConfigFiles: []string{conf}, Target: &tgt}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Target != "9" {
+		t.Errorf("target = %q, want flag override 9", cfg.Target)
+	}
+}
+
 func TestSchemaKeysWarnUnsupported(t *testing.T) {
 	// schemas/defaultSchema are recognized (an existing flyway.conf still loads)
 	// but unsupported, so each must produce a warning rather than a silent no-op.

@@ -74,11 +74,16 @@ type MigrateResult struct {
 	Applied []scan.Migration
 }
 
-// Migrate applies all pending migrations in order. It stops at the first
-// failure (like Flyway). Matching Flyway's defaults, it validates the recorded
-// history first (validateOnMigrate) and refuses out-of-order migrations — a
-// pending version below the latest applied one (outOfOrder=false).
+// Migrate applies all pending migrations in order, up to the configured target
+// version (if any). It stops at the first failure (like Flyway). Matching
+// Flyway's defaults, it validates the recorded history first (validateOnMigrate)
+// and refuses out-of-order migrations — a pending version below the latest
+// applied one (outOfOrder=false).
 func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
+	target, err := e.targetVersion()
+	if err != nil {
+		return MigrateResult{}, err
+	}
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return MigrateResult{}, err
 	}
@@ -94,7 +99,7 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 		return MigrateResult{}, fmt.Errorf("validation failed before migrate: %s", joinProblems(problems))
 	}
 
-	pending := history.Pending(r.migrations, r.checksums, rows)
+	pending := aboveTargetDropped(history.Pending(r.migrations, r.checksums, rows), target)
 	if maxV := history.MaxAppliedVersion(rows); maxV != nil {
 		for _, m := range pending {
 			if m.Type == scan.Versioned && m.Version.Compare(maxV) < 0 {
@@ -120,6 +125,35 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 		rank++
 	}
 	return result, nil
+}
+
+// targetVersion parses the configured target; empty or "latest" means no limit.
+func (e *Engine) targetVersion() (*scan.Version, error) {
+	t := e.Cfg.Target
+	if t == "" || strings.EqualFold(t, "latest") {
+		return nil, nil
+	}
+	v, err := scan.ParseVersion(t)
+	if err != nil {
+		return nil, fmt.Errorf("target: %w", err)
+	}
+	return v, nil
+}
+
+// aboveTargetDropped filters out versioned migrations above the target version.
+// A nil target keeps everything; repeatable migrations are never filtered.
+func aboveTargetDropped(migs []scan.Migration, target *scan.Version) []scan.Migration {
+	if target == nil {
+		return migs
+	}
+	kept := migs[:0]
+	for _, m := range migs {
+		if m.Type == scan.Versioned && m.Version.Compare(target) > 0 {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
 }
 
 // prepare substitutes placeholders in the migration's (already read) content and
@@ -157,8 +191,13 @@ type InfoEntry struct {
 	Status      string
 }
 
-// Info returns the state of every migration (applied or pending).
+// Info returns the state of every migration (applied, pending, below baseline,
+// or above the configured target).
 func (e *Engine) Info(ctx context.Context) ([]InfoEntry, error) {
+	target, err := e.targetVersion()
+	if err != nil {
+		return nil, err
+	}
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return nil, err
 	}
@@ -184,6 +223,8 @@ func (e *Engine) Info(ctx context.Context) ([]InfoEntry, error) {
 		}
 		status := "Applied"
 		switch {
+		case pending[m.Script] && m.Type == scan.Versioned && target != nil && m.Version.Compare(target) > 0:
+			status = "Above Target"
 		case pending[m.Script]:
 			status = "Pending"
 		case m.Type == scan.Versioned && baseline != nil && m.Version.Compare(baseline) <= 0 &&

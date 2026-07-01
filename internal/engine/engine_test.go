@@ -310,6 +310,49 @@ func TestMigrateNonTransactionalFailureThenRepair(t *testing.T) {
 	}
 }
 
+func TestMigrateHonorsTarget(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"V2__b.sql": "CREATE TABLE b (id int);",
+		"V3__c.sql": "CREATE TABLE c (id int);",
+		"R__v.sql":  "CREATE OR REPLACE VIEW v AS SELECT 1;",
+	})
+	conn := &fakeConn{}
+	cfg := testConfig(dir)
+	cfg.Target = "2"
+	eng := New(conn, cfg)
+
+	res, err := eng.Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// V1 and V2 apply; V3 is above the target; the repeatable is unaffected.
+	got := []string{}
+	for _, m := range res.Applied {
+		got = append(got, m.Script)
+	}
+	want := []string{"V1__a.sql", "V2__b.sql", "R__v.sql"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("applied = %v, want %v", got, want)
+	}
+
+	entries, err := eng.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Script == "V3__c.sql" && e.Status != "Above Target" {
+			t.Errorf("V3 status = %q, want Above Target", e.Status)
+		}
+	}
+
+	// An unparseable target is an error, not a silent no-limit.
+	cfg.Target = "not-a-version"
+	if _, err := New(conn, cfg).Migrate(context.Background()); err == nil {
+		t.Error("expected error for unparseable target")
+	}
+}
+
 func TestMigrateValidatesFirst(t *testing.T) {
 	// A drifted applied migration (checksum mismatch) must block migrate before
 	// anything is applied — Flyway's validateOnMigrate default.

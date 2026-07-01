@@ -35,6 +35,7 @@ type Config struct {
 	Placeholders           map[string]string
 
 	BaselineVersion string
+	Target          string // highest version migrate applies; "" or "latest" = no limit
 
 	// Warnings collects non-fatal issues (e.g. unsupported config keys) for the
 	// caller to surface to the user.
@@ -67,6 +68,7 @@ type Flags struct {
 	Password     *string
 	Locations    *[]string
 	Table        *string
+	Target       *string
 	Placeholders map[string]string
 }
 
@@ -118,6 +120,8 @@ func (cfg *Config) set(subkey, value string) bool {
 		cfg.Table = value
 	case "baselineVersion":
 		cfg.BaselineVersion = value
+	case "target":
+		cfg.Target = value
 	case "sqlMigrationPrefix":
 		cfg.SQLMigrationPrefix = value
 	case "repeatableSqlMigrationPrefix":
@@ -209,6 +213,9 @@ func applyFlags(cfg *Config, f Flags) {
 	}
 	if f.Table != nil {
 		cfg.Table = *f.Table
+	}
+	if f.Target != nil {
+		cfg.Target = *f.Target
 	}
 	for k, v := range f.Placeholders {
 		cfg.Placeholders[k] = v
