@@ -91,6 +91,21 @@ func anyContains(ss []string, sub string) bool {
 	return false
 }
 
+func TestSchemaKeysWarnUnsupported(t *testing.T) {
+	// schemas/defaultSchema are recognized (an existing flyway.conf still loads)
+	// but unsupported, so each must produce a warning rather than a silent no-op.
+	conf := writeConf(t, "flyway.schemas=a,b\nflyway.defaultSchema=a\n")
+	cfg, err := Load(Flags{ConfigFiles: []string{conf}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frag := range []string{"flyway.schemas is not supported", "flyway.defaultSchema is not supported"} {
+		if !anyContains(cfg.Warnings, frag) {
+			t.Errorf("expected a warning containing %q, got %v", frag, cfg.Warnings)
+		}
+	}
+}
+
 func TestDuplicateKeyLastWins(t *testing.T) {
 	conf := writeConf(t, "flyway.user=first\nflyway.user=second\n")
 	cfg, err := Load(Flags{ConfigFiles: []string{conf}}, nil)
