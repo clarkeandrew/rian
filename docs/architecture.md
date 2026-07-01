@@ -52,9 +52,11 @@ Adding a new database = implementing this interface. It currently abstracts:
 
 These methods are pure (string-returning), so they are unit-tested without a
 database. The live connection is a separate `db.Conn` interface (an open
-connection bound to a Dialect) with `EnsureHistory`, `ReadHistory`,
+connection bound to a Dialect) with `Lock`/`Unlock` (the migration lock:
+Postgres advisory lock, MySQL `GET_LOCK`), `EnsureHistory`, `ReadHistory`,
 `ApplyMigration` (which encapsulates the transaction strategy), `InsertHistory`,
-and `DeleteFailed`. `internal/db/postgres` provides the pgx-backed `Conn`. The
+`UpdateChecksum` (repair's checksum realignment), and `DeleteFailed`.
+`internal/db/postgres` provides the pgx-backed `Conn`. The
 `engine` depends only on `db.Conn`/`Dialect`, never on pgx — so it is unit-tested
 with an in-memory fake connection, while real driver behavior is covered by the
 end-to-end suite.
@@ -71,10 +73,14 @@ end-to-end suite.
   each other's history.
 - **Migrate is validate-first and in-order (Flyway defaults).** `migrate` fails
   on checksum drift, unresolved applied migrations, or failed rows before
-  applying anything (`validateOnMigrate`), and refuses a pending version below
-  the latest applied one (`outOfOrder=false`). Versioned migrations at or below
-  a recorded baseline row are treated as already applied. Known divergence:
+  applying anything (`validateOnMigrate`, configurable), refuses a pending
+  version below the latest applied one (`outOfOrder`, configurable), and stops
+  at the configured `target` version. Versioned migrations at or below a
+  recorded baseline row are treated as already applied. Known divergence:
   `validate` does not fail on pending migrations (Flyway's default does).
+- **Mutating commands hold the migration lock.** `migrate`/`baseline`/`repair`
+  take a per-history-table database lock (Postgres advisory lock, MySQL
+  `GET_LOCK`) so concurrent runs serialize instead of racing.
 - **Transaction strategy is dialect-driven.** Postgres runs each migration in a
   transaction and rolls back on failure. MySQL implicitly commits DDL and
   cannot roll back; on failure Rian marks the migration failed and requires
