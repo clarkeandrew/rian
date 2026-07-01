@@ -20,18 +20,16 @@ on the `main` branch. You do not bump versions by hand.
      amd64/arm64, archived as `.tar.gz` (`.zip` on Windows) with `checksums.txt`;
    - builds and pushes a multi-arch image to
      `ghcr.io/clarkeandrew/rian:<version>` and `:latest`;
-   - creates the GitHub Release as a **draft**.
-3. A maintainer reviews the draft Release and clicks **Publish**.
+   - **publishes** the GitHub Release immediately (no draft step).
 
 Tagging and building happen in one job because a tag pushed by `GITHUB_TOKEN`
 does not retrigger workflows.
 
-## Important: the tag is permanent
+## Important: releases are immediate and tags are permanent
 
-The draft only gates the GitHub **Release page**. By the time you see a draft,
-the run has already created a permanent git tag *and* pushed the container image
-to GHCR. If you abandon a draft, that version number is consumed; to reuse it you
-must delete the tag and image:
+There is no review gate: every qualifying push to `main` ships a public Release,
+a permanent git tag, and a container image on GHCR. To retract a version, delete
+the Release, then the tag and image (the version number stays consumed):
 
 ```sh
 git push --delete origin vX.Y.Z
