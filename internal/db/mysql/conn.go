@@ -118,18 +118,25 @@ func (c *Conn) Lock(ctx context.Context, table string) error {
 	if err != nil {
 		return fmt.Errorf("acquire migration lock: %w", err)
 	}
-	var got sql.NullInt64
-	// -1 = wait indefinitely; the lock also drops if the connection dies.
-	if err := lc.QueryRowContext(ctx, "SELECT GET_LOCK(?, -1)", lockName(table)).Scan(&got); err != nil {
-		_ = lc.Close()
-		return fmt.Errorf("acquire migration lock: %w", err)
+	// Wait in bounded slices: a negative GET_LOCK timeout means "infinite" on
+	// MySQL but "do not wait" on MariaDB, so an explicit timeout is the only
+	// portable way to block — and the loop honors ctx cancellation between
+	// slices. The lock also drops if the connection dies.
+	for {
+		var got sql.NullInt64
+		if err := lc.QueryRowContext(ctx, "SELECT GET_LOCK(?, 10)", lockName(table)).Scan(&got); err != nil {
+			_ = lc.Close()
+			return fmt.Errorf("acquire migration lock: %w", err)
+		}
+		if got.Valid && got.Int64 == 1 {
+			c.lockConn = lc
+			return nil
+		}
+		if !got.Valid { // NULL = error (e.g. out of memory), not a timeout
+			_ = lc.Close()
+			return fmt.Errorf("acquire migration lock: GET_LOCK returned NULL")
+		}
 	}
-	if !got.Valid || got.Int64 != 1 {
-		_ = lc.Close()
-		return fmt.Errorf("acquire migration lock: GET_LOCK returned %v", got)
-	}
-	c.lockConn = lc
-	return nil
 }
 
 func (c *Conn) Unlock(ctx context.Context, table string) error {
