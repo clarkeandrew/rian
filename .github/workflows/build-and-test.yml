@@ -97,3 +97,17 @@ jobs:
           lin=$(find dist -type f -path '*linux_amd64*' -name rian | head -1)
           file "$lin" | grep -qi "statically linked" || { echo "linux/amd64 not static"; exit 1; }
           echo "OK: goreleaser snapshot built; linux/amd64 is static"
+
+      - name: Assert binary size budget
+        run: |
+          set -e
+          # A small binary is a product feature. The budget (11 MiB; currently
+          # ~9.7 MiB) catches a heavy new dependency in review, not in a release.
+          lin=$(find dist -type f -path '*linux_amd64*' -name rian | head -1)
+          size=$(stat -c%s "$lin")
+          budget=$((11 * 1024 * 1024))
+          echo "linux/amd64 release binary: $size bytes (budget: $budget)"
+          if [ "$size" -gt "$budget" ]; then
+            echo "ERROR: binary exceeds the size budget; find what grew before raising it"
+            exit 1
+          fi
