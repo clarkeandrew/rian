@@ -28,7 +28,7 @@ discover migrations  ->  resolve config + placeholders  ->  compute checksums
 
 | Package | Responsibility |
 |---|---|
-| `cmd/rian` | CLI entrypoint; cobra root + subcommands; wires config → engine. |
+| `cmd/rian` | CLI entrypoint (stdlib `flag`, no CLI framework — keeps the binary small); command dispatch; wires config → engine. |
 | `internal/config` | Merge configuration from `flyway.conf` files, `FLYWAY_*` env vars, and CLI flags (precedence: flags > env > file). Exposes resolved settings + placeholders. |
 | `internal/scan` | Discover migration files in configured locations; parse filenames into `(type, version, description)`; order versions with Flyway's numeric-segment ordering. |
 | `internal/checksum` | Compute the **Flyway-exact CRC32** of a migration (see Invariants). The keystone of drop-in compatibility. |
@@ -99,6 +99,10 @@ and disabled by default), and databases beyond PostgreSQL and MySQL.
   static single-binary distribution goal. See
   `docs/plans/2026-06-25-initial-project-outline-and-tech-stack.md`.
 - **MIT license:** permissive, compatible with all chosen drivers.
+- **Stdlib `flag` CLI (no cobra):** the framework cost ~270 KB of binary and two
+  dependencies for five subcommands; `flag` also natively accepts Flyway's
+  single-dash long options. See
+  `docs/plans/2026-07-02-lightweight-binary-and-image.md`.
 - **MySQL driver (go-sql-driver/mysql, MPL-2.0):** used unmodified so the only
   copyleft obligation (publishing modified MPL files) never triggers. MySQL DDL
   implicitly commits, so its dialect reports non-transactional DDL and a failed
