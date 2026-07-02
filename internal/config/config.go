@@ -34,7 +34,11 @@ type Config struct {
 	PlaceholderReplacement bool
 	Placeholders           map[string]string
 
-	BaselineVersion string
+	BaselineVersion   string
+	Target            string // highest version migrate applies; "" or "latest" = no limit
+	OutOfOrder        bool   // allow applying a pending version below the latest applied one
+	ValidateOnMigrate bool   // validate the recorded history before migrating
+	InstalledBy       string // installed_by history value; "" = the database user
 
 	// Warnings collects non-fatal issues (e.g. unsupported config keys) for the
 	// caller to surface to the user.
@@ -55,19 +59,23 @@ func Default() Config {
 		PlaceholderReplacement:       true,
 		Placeholders:                 map[string]string{},
 		BaselineVersion:              "1",
+		ValidateOnMigrate:            true,
 	}
 }
 
 // Flags holds CLI overrides. Pointer fields are nil when the flag was not set,
 // so an explicit empty value still overrides lower-precedence sources.
 type Flags struct {
-	ConfigFiles  []string
-	URL          *string
-	User         *string
-	Password     *string
-	Locations    *[]string
-	Table        *string
-	Placeholders map[string]string
+	ConfigFiles       []string
+	URL               *string
+	User              *string
+	Password          *string
+	Locations         *[]string
+	Table             *string
+	Target            *string
+	OutOfOrder        *bool
+	ValidateOnMigrate *bool
+	Placeholders      map[string]string
 }
 
 // Load builds a Config by starting from Default, then applying (in increasing
@@ -118,6 +126,14 @@ func (cfg *Config) set(subkey, value string) bool {
 		cfg.Table = value
 	case "baselineVersion":
 		cfg.BaselineVersion = value
+	case "target":
+		cfg.Target = value
+	case "outOfOrder":
+		cfg.OutOfOrder = parseBool(value, cfg.OutOfOrder)
+	case "validateOnMigrate":
+		cfg.ValidateOnMigrate = parseBool(value, cfg.ValidateOnMigrate)
+	case "installedBy":
+		cfg.InstalledBy = value
 	case "sqlMigrationPrefix":
 		cfg.SQLMigrationPrefix = value
 	case "repeatableSqlMigrationPrefix":
@@ -209,6 +225,15 @@ func applyFlags(cfg *Config, f Flags) {
 	}
 	if f.Table != nil {
 		cfg.Table = *f.Table
+	}
+	if f.Target != nil {
+		cfg.Target = *f.Target
+	}
+	if f.OutOfOrder != nil {
+		cfg.OutOfOrder = *f.OutOfOrder
+	}
+	if f.ValidateOnMigrate != nil {
+		cfg.ValidateOnMigrate = *f.ValidateOnMigrate
 	}
 	for k, v := range f.Placeholders {
 		cfg.Placeholders[k] = v

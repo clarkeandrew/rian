@@ -30,9 +30,12 @@ type fakeConn struct {
 
 	applied    []string
 	statements [][]string // statements passed to each successful ApplyMigration
+	locks      int        // Lock calls minus Unlock calls (0 = balanced)
 }
 
 func (f *fakeConn) Dialect() db.Dialect                         { return nil }
+func (f *fakeConn) Lock(context.Context, string) error          { f.locks++; return nil }
+func (f *fakeConn) Unlock(context.Context, string) error        { f.locks--; return nil }
 func (f *fakeConn) EnsureHistory(context.Context, string) error { return f.ensureErr }
 func (f *fakeConn) ReadHistory(context.Context, string) ([]history.Row, error) {
 	if f.readErr != nil {
@@ -56,6 +59,15 @@ func (f *fakeConn) ApplyMigration(_ context.Context, _ string, stmts []string, r
 }
 func (f *fakeConn) InsertHistory(_ context.Context, _ string, row history.Row) error {
 	f.rows = append(f.rows, row)
+	return nil
+}
+func (f *fakeConn) UpdateChecksum(_ context.Context, _ string, rank int, ck int32) error {
+	for i := range f.rows {
+		if f.rows[i].InstalledRank == rank {
+			c := ck
+			f.rows[i].Checksum = &c
+		}
+	}
 	return nil
 }
 func (f *fakeConn) DeleteFailed(context.Context, string) (int, error) {
@@ -121,6 +133,9 @@ func TestMigrateAppliesPendingInOrder(t *testing.T) {
 	if len(res2.Applied) != 0 {
 		t.Errorf("second migrate applied %v, want none", res2.Applied)
 	}
+	if conn.locks != 0 {
+		t.Errorf("migration lock not balanced: %d net Lock calls", conn.locks)
+	}
 }
 
 func TestMigrateStopsAtFirstFailure(t *testing.T) {
@@ -144,6 +159,10 @@ func TestMigrateStopsAtFirstFailure(t *testing.T) {
 		if s == "V3__c.sql" {
 			t.Error("V3 should not run after V2 failed")
 		}
+	}
+	// The migration lock must be released even on failure.
+	if conn.locks != 0 {
+		t.Errorf("migration lock not balanced after failure: %d net Lock calls", conn.locks)
 	}
 }
 
@@ -300,13 +319,56 @@ func TestMigrateNonTransactionalFailureThenRepair(t *testing.T) {
 	if _, err := eng.Migrate(context.Background()); err == nil {
 		t.Fatal("migrate should refuse while a failed row is present")
 	}
-	if n, _ := eng.Repair(context.Background()); n != 1 {
+	if res, _ := eng.Repair(context.Background()); res.RemovedFailed != 1 {
 		t.Fatalf("repair should remove 1 failed row")
 	}
 	// After repair the (now non-failing) migration applies cleanly.
 	res, err := eng.Migrate(context.Background())
 	if err != nil || len(res.Applied) != 1 {
 		t.Fatalf("re-migrate after repair: applied=%v err=%v", res.Applied, err)
+	}
+}
+
+func TestMigrateHonorsTarget(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"V2__b.sql": "CREATE TABLE b (id int);",
+		"V3__c.sql": "CREATE TABLE c (id int);",
+		"R__v.sql":  "CREATE OR REPLACE VIEW v AS SELECT 1;",
+	})
+	conn := &fakeConn{}
+	cfg := testConfig(dir)
+	cfg.Target = "2"
+	eng := New(conn, cfg)
+
+	res, err := eng.Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// V1 and V2 apply; V3 is above the target; the repeatable is unaffected.
+	got := []string{}
+	for _, m := range res.Applied {
+		got = append(got, m.Script)
+	}
+	want := []string{"V1__a.sql", "V2__b.sql", "R__v.sql"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("applied = %v, want %v", got, want)
+	}
+
+	entries, err := eng.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Script == "V3__c.sql" && e.Status != "Above Target" {
+			t.Errorf("V3 status = %q, want Above Target", e.Status)
+		}
+	}
+
+	// An unparseable target is an error, not a silent no-limit.
+	cfg.Target = "not-a-version"
+	if _, err := New(conn, cfg).Migrate(context.Background()); err == nil {
+		t.Error("expected error for unparseable target")
 	}
 }
 
@@ -328,6 +390,18 @@ func TestMigrateValidatesFirst(t *testing.T) {
 	if len(conn.applied) != 0 {
 		t.Errorf("nothing should be applied on a drifted history, applied %v", conn.applied)
 	}
+
+	// With validateOnMigrate disabled, the drifted history is tolerated and the
+	// pending migration applies.
+	cfg := testConfig(dir)
+	cfg.ValidateOnMigrate = false
+	res, err := New(conn, cfg).Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != 1 || res.Applied[0].Script != "V2__b.sql" {
+		t.Fatalf("applied = %v, want V2", res.Applied)
+	}
 }
 
 func TestMigrateRefusesOutOfOrder(t *testing.T) {
@@ -342,11 +416,22 @@ func TestMigrateRefusesOutOfOrder(t *testing.T) {
 		{InstalledRank: 1, Version: "2", Script: "V2__b.sql", Checksum: &ck, Success: true},
 	}}
 	_, err := New(conn, testConfig(dir)).Migrate(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "out-of-order") {
+	if err == nil || !strings.Contains(err.Error(), "outOfOrder") {
 		t.Fatalf("expected out-of-order refusal, got %v", err)
 	}
 	if len(conn.applied) != 0 {
 		t.Errorf("nothing should be applied, applied %v", conn.applied)
+	}
+
+	// With outOfOrder enabled, the older migration applies.
+	cfg := testConfig(dir)
+	cfg.OutOfOrder = true
+	res, err := New(conn, cfg).Migrate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Applied) != 1 || res.Applied[0].Script != "V1__a.sql" {
+		t.Fatalf("applied = %v, want V1 (out of order)", res.Applied)
 	}
 }
 
@@ -384,6 +469,19 @@ func TestBaselineThenMigrateSkipsBelowBaseline(t *testing.T) {
 		if e.Status != wantStatus[e.Script] {
 			t.Errorf("info %s status = %q, want %q", e.Script, e.Status, wantStatus[e.Script])
 		}
+	}
+}
+
+func TestInstalledByOverride(t *testing.T) {
+	dir := migrationsDir(t, map[string]string{"V1__a.sql": "CREATE TABLE a (id int);"})
+	conn := &fakeConn{}
+	cfg := testConfig(dir) // User = "tester"
+	cfg.InstalledBy = "deploy-bot"
+	if _, err := New(conn, cfg).Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.rows[0].InstalledBy; got != "deploy-bot" {
+		t.Errorf("installed_by = %q, want configured override deploy-bot", got)
 	}
 }
 
@@ -507,14 +605,52 @@ func TestRepairRemovesFailedRows(t *testing.T) {
 	}}
 	eng := New(conn, testConfig(dir))
 
-	n, err := eng.Repair(context.Background())
+	res, err := eng.Repair(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("repaired %d, want 1", n)
+	if res.RemovedFailed != 1 {
+		t.Errorf("repaired %d, want 1", res.RemovedFailed)
 	}
 	if len(conn.rows) != 1 || !conn.rows[0].Success {
 		t.Errorf("failed row should be gone, rows = %+v", conn.rows)
+	}
+}
+
+func TestRepairRealignsChecksums(t *testing.T) {
+	// V1 was applied and then edited on disk: repair must update the stored
+	// checksum so validate is clean again. Repeatable rows are untouched (their
+	// changed checksum means "re-apply", not "drifted").
+	dir := migrationsDir(t, map[string]string{
+		"V1__a.sql": "CREATE TABLE a (id int);",
+		"R__v.sql":  "CREATE OR REPLACE VIEW v AS SELECT 1;",
+	})
+	stale := int32(999)
+	conn := &fakeConn{rows: []history.Row{
+		{InstalledRank: 1, Version: "1", Script: "V1__a.sql", Checksum: &stale, Success: true},
+		{InstalledRank: 2, Version: "", Description: "v", Script: "R__v.sql", Checksum: &stale, Success: true},
+	}}
+	eng := New(conn, testConfig(dir))
+
+	res, err := eng.Repair(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.AlignedChecksums != 1 {
+		t.Fatalf("aligned %d checksums, want 1 (versioned only)", res.AlignedChecksums)
+	}
+	want := checksum.CalculateBytes([]byte("CREATE TABLE a (id int);"))
+	if got := conn.rows[0].Checksum; got == nil || *got != want {
+		t.Errorf("stored checksum = %v, want %d", got, want)
+	}
+	if got := conn.rows[1].Checksum; got == nil || *got != stale {
+		t.Errorf("repeatable checksum must not be realigned, got %v", got)
+	}
+	problems, err := eng.Validate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Errorf("validate should be clean after repair, got %v", problems)
 	}
 }

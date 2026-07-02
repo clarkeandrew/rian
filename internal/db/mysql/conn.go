@@ -25,6 +25,10 @@ type Conn struct {
 	db      *sql.DB
 	exec    executor // defaults to db; overridable in tests
 	dialect Dialect
+
+	// lockConn pins the migration lock to one pooled connection: GET_LOCK is
+	// per-connection, so acquire and release must happen on the same one.
+	lockConn *sql.Conn
 }
 
 var _ db.Conn = (*Conn)(nil)
@@ -96,6 +100,59 @@ func (c *Conn) Dialect() db.Dialect { return c.dialect }
 
 func (c *Conn) Close(context.Context) error { return c.db.Close() }
 
+// lockName derives the GET_LOCK name for a history table. Lock names are
+// server-wide and capped at 64 characters.
+func lockName(table string) string {
+	name := "rian:" + table
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	return name
+}
+
+func (c *Conn) Lock(ctx context.Context, table string) error {
+	if c.lockConn != nil {
+		return fmt.Errorf("migration lock already held")
+	}
+	lc, err := c.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	// Wait in bounded slices: a negative GET_LOCK timeout means "infinite" on
+	// MySQL but "do not wait" on MariaDB, so an explicit timeout is the only
+	// portable way to block — and the loop honors ctx cancellation between
+	// slices. The lock also drops if the connection dies.
+	for {
+		var got sql.NullInt64
+		if err := lc.QueryRowContext(ctx, "SELECT GET_LOCK(?, 10)", lockName(table)).Scan(&got); err != nil {
+			_ = lc.Close()
+			return fmt.Errorf("acquire migration lock: %w", err)
+		}
+		if got.Valid && got.Int64 == 1 {
+			c.lockConn = lc
+			return nil
+		}
+		if !got.Valid { // NULL = error (e.g. out of memory), not a timeout
+			_ = lc.Close()
+			return fmt.Errorf("acquire migration lock: GET_LOCK returned NULL")
+		}
+	}
+}
+
+func (c *Conn) Unlock(ctx context.Context, table string) error {
+	if c.lockConn == nil {
+		return nil
+	}
+	var released sql.NullInt64
+	err := c.lockConn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", lockName(table)).Scan(&released)
+	closeErr := c.lockConn.Close()
+	c.lockConn = nil
+	if err != nil {
+		return fmt.Errorf("release migration lock: %w", err)
+	}
+	return closeErr
+}
+
 func (c *Conn) EnsureHistory(ctx context.Context, table string) error {
 	if _, err := c.db.ExecContext(ctx, c.dialect.CreateHistoryTableSQL(table)); err != nil {
 		return fmt.Errorf("create history table: %w", err)
@@ -158,6 +215,13 @@ func (c *Conn) ApplyMigration(ctx context.Context, table string, statements []st
 func (c *Conn) InsertHistory(ctx context.Context, table string, row history.Row) error {
 	if _, err := c.exec.ExecContext(ctx, c.dialect.InsertHistorySQL(table), insertArgs(row)...); err != nil {
 		return fmt.Errorf("insert history row: %w", err)
+	}
+	return nil
+}
+
+func (c *Conn) UpdateChecksum(ctx context.Context, table string, installedRank int, checksum int32) error {
+	if _, err := c.exec.ExecContext(ctx, c.dialect.UpdateChecksumSQL(table), checksum, installedRank); err != nil {
+		return fmt.Errorf("update checksum: %w", err)
 	}
 	return nil
 }

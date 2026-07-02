@@ -74,11 +74,20 @@ type MigrateResult struct {
 	Applied []scan.Migration
 }
 
-// Migrate applies all pending migrations in order. It stops at the first
-// failure (like Flyway). Matching Flyway's defaults, it validates the recorded
-// history first (validateOnMigrate) and refuses out-of-order migrations — a
-// pending version below the latest applied one (outOfOrder=false).
+// Migrate applies all pending migrations in order, up to the configured target
+// version (if any). It stops at the first failure (like Flyway). Matching
+// Flyway's defaults, it validates the recorded history first (validateOnMigrate)
+// and refuses out-of-order migrations — a pending version below the latest
+// applied one — unless outOfOrder is enabled.
 func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
+	target, err := e.targetVersion()
+	if err != nil {
+		return MigrateResult{}, err
+	}
+	if err := e.Conn.Lock(ctx, e.Cfg.Table); err != nil {
+		return MigrateResult{}, err
+	}
+	defer e.Conn.Unlock(ctx, e.Cfg.Table)
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return MigrateResult{}, err
 	}
@@ -90,16 +99,18 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	if err != nil {
 		return MigrateResult{}, err
 	}
-	if problems := history.Validate(r.migrations, r.checksums, rows); len(problems) > 0 {
-		return MigrateResult{}, fmt.Errorf("validation failed before migrate: %s", joinProblems(problems))
+	if e.Cfg.ValidateOnMigrate {
+		if problems := history.Validate(r.migrations, r.checksums, rows); len(problems) > 0 {
+			return MigrateResult{}, fmt.Errorf("validation failed before migrate: %s", joinProblems(problems))
+		}
 	}
 
-	pending := history.Pending(r.migrations, r.checksums, rows)
-	if maxV := history.MaxAppliedVersion(rows); maxV != nil {
+	pending := aboveTargetDropped(history.Pending(r.migrations, r.checksums, rows), target)
+	if maxV := history.MaxAppliedVersion(rows); maxV != nil && !e.Cfg.OutOfOrder {
 		for _, m := range pending {
 			if m.Type == scan.Versioned && m.Version.Compare(maxV) < 0 {
 				return MigrateResult{}, fmt.Errorf(
-					"migration %s (version %s) is below the already-applied version %s; out-of-order migrations are not supported",
+					"migration %s (version %s) is below the already-applied version %s; set outOfOrder=true to allow it",
 					m.Script, m.Version, maxV)
 			}
 		}
@@ -122,6 +133,44 @@ func (e *Engine) Migrate(ctx context.Context) (MigrateResult, error) {
 	return result, nil
 }
 
+// installedBy returns the value recorded in installed_by: the configured
+// override, or the connection user.
+func (e *Engine) installedBy() string {
+	if e.Cfg.InstalledBy != "" {
+		return e.Cfg.InstalledBy
+	}
+	return e.Cfg.User
+}
+
+// targetVersion parses the configured target; empty or "latest" means no limit.
+func (e *Engine) targetVersion() (*scan.Version, error) {
+	t := e.Cfg.Target
+	if t == "" || strings.EqualFold(t, "latest") {
+		return nil, nil
+	}
+	v, err := scan.ParseVersion(t)
+	if err != nil {
+		return nil, fmt.Errorf("target: %w", err)
+	}
+	return v, nil
+}
+
+// aboveTargetDropped filters out versioned migrations above the target version.
+// A nil target keeps everything; repeatable migrations are never filtered.
+func aboveTargetDropped(migs []scan.Migration, target *scan.Version) []scan.Migration {
+	if target == nil {
+		return migs
+	}
+	kept := migs[:0]
+	for _, m := range migs {
+		if m.Type == scan.Versioned && m.Version.Compare(target) > 0 {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
+}
+
 // prepare substitutes placeholders in the migration's (already read) content and
 // splits it into statements.
 func (e *Engine) prepare(m scan.Migration, content []byte) ([]string, error) {
@@ -140,7 +189,7 @@ func (e *Engine) historyRow(m scan.Migration, checksum int32, rank int) history.
 		Type:          "SQL",
 		Script:        m.Script,
 		Checksum:      &checksum,
-		InstalledBy:   e.Cfg.User,
+		InstalledBy:   e.installedBy(),
 	}
 	if m.Type == scan.Versioned {
 		row.Version = m.Version.String()
@@ -157,8 +206,13 @@ type InfoEntry struct {
 	Status      string
 }
 
-// Info returns the state of every migration (applied or pending).
+// Info returns the state of every migration (applied, pending, below baseline,
+// or above the configured target).
 func (e *Engine) Info(ctx context.Context) ([]InfoEntry, error) {
+	target, err := e.targetVersion()
+	if err != nil {
+		return nil, err
+	}
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return nil, err
 	}
@@ -184,6 +238,8 @@ func (e *Engine) Info(ctx context.Context) ([]InfoEntry, error) {
 		}
 		status := "Applied"
 		switch {
+		case pending[m.Script] && m.Type == scan.Versioned && target != nil && m.Version.Compare(target) > 0:
+			status = "Above Target"
 		case pending[m.Script]:
 			status = "Pending"
 		case m.Type == scan.Versioned && baseline != nil && m.Version.Compare(baseline) <= 0 &&
@@ -224,6 +280,10 @@ func (e *Engine) Baseline(ctx context.Context) error {
 	if _, err := scan.ParseVersion(e.Cfg.BaselineVersion); err != nil {
 		return fmt.Errorf("baseline version: %w", err)
 	}
+	if err := e.Conn.Lock(ctx, e.Cfg.Table); err != nil {
+		return err
+	}
+	defer e.Conn.Unlock(ctx, e.Cfg.Table)
 	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
 		return err
 	}
@@ -240,18 +300,74 @@ func (e *Engine) Baseline(ctx context.Context) error {
 		Description:   "<< Flyway Baseline >>",
 		Type:          history.TypeBaseline,
 		Script:        "<< Flyway Baseline >>",
-		InstalledBy:   e.Cfg.User,
+		InstalledBy:   e.installedBy(),
 		Success:       true,
 	}
 	return e.Conn.InsertHistory(ctx, e.Cfg.Table, row)
 }
 
-// Repair removes failed migration rows so a corrected migration can be re-run.
-func (e *Engine) Repair(ctx context.Context) (int, error) {
-	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
-		return 0, err
+// RepairResult reports what Repair changed.
+type RepairResult struct {
+	RemovedFailed    int
+	AlignedChecksums int
+}
+
+// Repair fixes the schema history the way Flyway's repair does: it removes
+// failed migration rows (so a corrected migration can be re-run) and realigns
+// the stored checksum of applied versioned migrations with the local files.
+// Repeatable rows are left alone — their checksum change is what triggers
+// re-application.
+func (e *Engine) Repair(ctx context.Context) (RepairResult, error) {
+	var res RepairResult
+	if err := e.Conn.Lock(ctx, e.Cfg.Table); err != nil {
+		return res, err
 	}
-	return e.Conn.DeleteFailed(ctx, e.Cfg.Table)
+	defer e.Conn.Unlock(ctx, e.Cfg.Table)
+	if err := e.Conn.EnsureHistory(ctx, e.Cfg.Table); err != nil {
+		return res, err
+	}
+	removed, err := e.Conn.DeleteFailed(ctx, e.Cfg.Table)
+	if err != nil {
+		return res, err
+	}
+	res.RemovedFailed = removed
+
+	r, err := e.resolve()
+	if err != nil {
+		return res, err
+	}
+	onDisk := map[string]scan.Migration{}
+	for _, m := range r.migrations {
+		if m.Type == scan.Versioned {
+			onDisk[m.Version.Canonical()] = m
+		}
+	}
+	rows, err := e.Conn.ReadHistory(ctx, e.Cfg.Table)
+	if err != nil {
+		return res, err
+	}
+	for _, row := range rows {
+		if !row.Success || row.Type == history.TypeBaseline || row.Version == "" {
+			continue
+		}
+		v, err := scan.ParseVersion(row.Version)
+		if err != nil {
+			continue
+		}
+		m, ok := onDisk[v.Canonical()]
+		if !ok {
+			continue
+		}
+		local := r.checksums[m.Script]
+		if row.Checksum != nil && *row.Checksum == local {
+			continue
+		}
+		if err := e.Conn.UpdateChecksum(ctx, e.Cfg.Table, row.InstalledRank, local); err != nil {
+			return res, err
+		}
+		res.AlignedChecksums++
+	}
+	return res, nil
 }
 
 func typeName(t scan.Type) string {

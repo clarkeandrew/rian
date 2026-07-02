@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"strings"
 	"time"
 
@@ -50,6 +51,26 @@ func Connect(ctx context.Context, url, user, password string) (*Conn, error) {
 func (c *Conn) Dialect() db.Dialect { return c.dialect }
 
 func (c *Conn) Close(ctx context.Context) error { return c.conn.Close(ctx) }
+
+// lockKey derives the advisory-lock key for a history table. Session-level
+// advisory locks are automatically released when the connection closes.
+func lockKey(table string) int64 {
+	return int64(crc32.ChecksumIEEE([]byte("rian:" + table)))
+}
+
+func (c *Conn) Lock(ctx context.Context, table string) error {
+	if _, err := c.conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey(table)); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	return nil
+}
+
+func (c *Conn) Unlock(ctx context.Context, table string) error {
+	if _, err := c.conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey(table)); err != nil {
+		return fmt.Errorf("release migration lock: %w", err)
+	}
+	return nil
+}
 
 func (c *Conn) EnsureHistory(ctx context.Context, table string) error {
 	_, err := c.conn.Exec(ctx, c.dialect.CreateHistoryTableSQL(table))
@@ -111,6 +132,13 @@ func (c *Conn) ApplyMigration(ctx context.Context, table string, statements []st
 func (c *Conn) InsertHistory(ctx context.Context, table string, row history.Row) error {
 	if _, err := c.conn.Exec(ctx, c.dialect.InsertHistorySQL(table), insertArgs(row)...); err != nil {
 		return fmt.Errorf("insert history row: %w", err)
+	}
+	return nil
+}
+
+func (c *Conn) UpdateChecksum(ctx context.Context, table string, installedRank int, checksum int32) error {
+	if _, err := c.conn.Exec(ctx, c.dialect.UpdateChecksumSQL(table), checksum, installedRank); err != nil {
+		return fmt.Errorf("update checksum: %w", err)
 	}
 	return nil
 }

@@ -63,3 +63,10 @@ func (d Dialect) InsertHistorySQL(table string) string {
 		`"checksum", "installed_by", "execution_time", "success") ` +
 		`VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 }
+
+// UpdateChecksumSQL returns the parameterized UPDATE ($1 = checksum,
+// $2 = installed_rank) used by repair.
+func (d Dialect) UpdateChecksumSQL(table string) string {
+	return `UPDATE ` + d.QuoteIdentifier(table) +
+		` SET "checksum" = $1 WHERE "installed_rank" = $2`
+}

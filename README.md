@@ -24,8 +24,11 @@ The first milestone is implemented:
 
 - Versioned (`V<version>__<desc>.sql`) and repeatable (`R__<desc>.sql`) SQL
   migrations
-- Commands: `migrate`, `info`, `validate`, `baseline`, `repair`
-- `${placeholder}` substitution and `flyway.conf` / `FLYWAY_*` / flag config
+- Commands: `migrate`, `info`, `validate`, `baseline`, `repair` (removes failed
+  entries and realigns checksums)
+- `${placeholder}` substitution and `flyway.conf` / `FLYWAY_*` / flag config,
+  including `target`, `outOfOrder`, `validateOnMigrate`, and `installedBy`
+- A per-history-table database lock so concurrent runs cannot race
 - PostgreSQL and MySQL
 
 ## Usage
@@ -43,7 +46,7 @@ rian info --url jdbc:postgresql://localhost:5432/app --user app --password secre
 # Verify applied migrations still match the local files (checksums)
 rian validate ...
 
-# Baseline an existing database, or clear failed entries
+# Baseline an existing database; clear failed entries / realign checksums
 rian baseline ...
 rian repair ...
 ```
@@ -109,9 +112,11 @@ features — undo migrations, Java/script migrations, callbacks — are intentio
 out of scope.
 
 Behavior matches Flyway's defaults: `migrate` validates the recorded history
-first (`validateOnMigrate`) and refuses out-of-order migrations
-(`outOfOrder=false`); a baseline marks every version at or below it as applied.
-Neither behavior is configurable yet. Known divergences: `validate` does not
+first (`validateOnMigrate`, disable with `flyway.validateOnMigrate=false`) and
+refuses out-of-order migrations (opt in with `flyway.outOfOrder=true`); a
+baseline marks every version at or below it as applied; migrations run under a
+database lock (Postgres advisory lock, MySQL `GET_LOCK`) so concurrent runs
+serialize. Known divergences: `validate` does not
 fail on pending migrations (Flyway's default does — use `rian info` to see
 pending state), and `flyway.schemas`/`flyway.defaultSchema` are unsupported
 (Rian warns and uses the connection's default schema).

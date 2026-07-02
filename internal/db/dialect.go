@@ -31,4 +31,8 @@ type Dialect interface {
 	// nine bind parameters are, in order: installed_rank, version, description,
 	// type, script, checksum, installed_by, execution_time, success.
 	InsertHistorySQL(table string) string
+
+	// UpdateChecksumSQL returns a parameterized UPDATE setting a row's checksum.
+	// The two bind parameters are, in order: checksum, installed_rank.
+	UpdateChecksumSQL(table string) string
 }
